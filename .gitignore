@@ -14,6 +14,11 @@ dist-ssr
 .env
 .env.*
 
+# Reference PDFs and spreadsheets (not source code)
+*.pdf
+*.xlsx
+*.xls
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
