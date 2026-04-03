@@ -28,24 +28,26 @@ export function downloadPdf(elementId, filename, opts = {}) {
   const origMargin = el.style.margin;
   const origPadding = el.style.padding;
 
-  // Set element to a fixed width that maps well to letter paper
-  // 7.5in content width (8.5in - 0.5in margins each side) × 96 DPI = 720px
-  el.style.width = '720px';
-  el.style.maxWidth = '720px';
+  // Determine content width — use opts or default to 720px (letter)
+  const contentWidth = (opts.html2canvas && opts.html2canvas.width) || 720;
+
+  // Set element to the target width
+  el.style.width = contentWidth + 'px';
+  el.style.maxWidth = contentWidth + 'px';
   el.style.margin = '0';
-  el.style.padding = '20px';
+  el.style.padding = '0';
 
   const defaultOpts = {
     margin: [0.3, 0.4, 0.3, 0.4], // top, left, bottom, right in inches
     filename: `${filename}.pdf`,
     image: { type: 'png', quality: 1 },
     html2canvas: {
-      scale: 2, // 2x for crisp text while keeping file size manageable
+      scale: 2,
       useCORS: true,
       letterRendering: true,
       logging: false,
-      width: 720,
-      windowWidth: 720,
+      width: contentWidth,
+      windowWidth: contentWidth,
     },
     jsPDF: {
       unit: 'in',
@@ -61,6 +63,14 @@ export function downloadPdf(elementId, filename, opts = {}) {
     filename: `${filename}.pdf`,
     html2canvas: { ...defaultOpts.html2canvas, ...(opts.html2canvas || {}) },
     jsPDF: { ...defaultOpts.jsPDF, ...(opts.jsPDF || {}) },
+  };
+
+  // Override pagebreak to always include html2pdf__page-break trigger
+  merged.pagebreak = {
+    mode: ['css', 'legacy'],
+    before: ['.html2pdf__page-break'],
+    avoid: ['tr', '.page-break-avoid'],
+    ...(opts.pagebreak || {}),
   };
 
   html2pdf()

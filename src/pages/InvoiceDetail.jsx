@@ -1,6 +1,7 @@
 import { useCallback, useState } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Printer, Download, HardHat, CheckCircle, Loader2 } from 'lucide-react';
+import { ArrowLeft, Printer, Download, CheckCircle, Loader2 } from 'lucide-react';
+import boulderLogo from '../assets/boulder-logo.png';
 import { payApplications as mockPayApps, subPayApplications as mockSubPayApps, clients as mockClients, projects as mockProjects } from '../data/mockData';
 import { invoiceService } from '../services/supabaseService';
 import { useSupabaseById } from '../hooks/useSupabase';
@@ -131,10 +132,17 @@ const labelStyle = { fontWeight: 700, fontSize: '0.7rem', color: '#333', textTra
 const valStyle = { fontSize: '0.8rem', color: '#1e293b' };
 const outerBorder = { border: '2px solid #000' };
 
+// A4 at 96 DPI: 794px wide
 const pageStyle = {
-  maxWidth: 1000, margin: '0 auto', background: '#fff', padding: '36px 44px',
-  border: '1px solid #ddd', marginBottom: 24, position: 'relative',
+  width: '794px',
+  margin: '0 auto',
+  background: '#fff',
+  padding: '36px 42px',
+  border: '1px solid #e5e7eb',
+  marginBottom: 0,
+  position: 'relative',
   fontFamily: 'system-ui, -apple-system, sans-serif',
+  boxSizing: 'border-box',
 };
 
 /* ================================================================
@@ -142,18 +150,7 @@ const pageStyle = {
    ================================================================ */
 
 const Logo = () => (
-  <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-    <div style={{
-      width: 48, height: 48, borderRadius: '50%', background: 'linear-gradient(135deg, #f59e0b, #d97706)',
-      display: 'flex', alignItems: 'center', justifyContent: 'center',
-    }}>
-      <HardHat size={28} style={{ color: '#fff' }} />
-    </div>
-    <div>
-      <div style={{ fontSize: '1.25rem', fontWeight: 800, color: '#0f172a', lineHeight: 1.1, letterSpacing: '0.05em' }}>BOULDER</div>
-      <div style={{ fontSize: '0.65rem', fontWeight: 600, color: '#d97706', letterSpacing: '0.15em', textTransform: 'uppercase' }}>Construction</div>
-    </div>
-  </div>
+  <img src={boulderLogo} alt="Boulder Construction" style={{ height: 48, width: 'auto', display: 'block' }} />
 );
 
 /* ================================================================
@@ -213,12 +210,16 @@ export default function InvoiceDetail() {
     }
   };
 
-  // PDF download for active tab
+  // PDF download for active tab — A4, flush edges
   const handleDownload = () => {
     const tabId = activeTab === 'g702' ? 'invoice-g702-content'
                 : activeTab === 'g703' ? 'invoice-g703-content'
                 : 'invoice-backup-content';
-    downloadPdf(tabId, `Invoice-${getInvoiceNumber()}-${activeTab.toUpperCase()}`);
+    downloadPdf(tabId, `Invoice-${getInvoiceNumber()}-${activeTab.toUpperCase()}`, {
+      jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
+      margin: [0, 0, 0, 0],
+      html2canvas: { scale: 2, width: 794, windowWidth: 794 },
+    });
   };
 
   /* ---- Loading / Error states ---- */
@@ -286,9 +287,9 @@ export default function InvoiceDetail() {
   const tabBtnStyle = (tabKey) => ({
     padding: '8px 18px',
     borderRadius: 6,
-    border: activeTab === tabKey ? '2px solid #f59e0b' : '1px solid #cbd5e1',
-    background: activeTab === tabKey ? '#fffbeb' : '#fff',
-    color: activeTab === tabKey ? '#92400e' : '#475569',
+    border: activeTab === tabKey ? '2px solid #f07030' : '1px solid #d1d5db',
+    background: activeTab === tabKey ? '#fff4ee' : '#fff',
+    color: activeTab === tabKey ? '#f07030' : '#6b7280',
     cursor: 'pointer',
     fontSize: '0.85rem',
     fontWeight: activeTab === tabKey ? 700 : 500,
@@ -298,12 +299,12 @@ export default function InvoiceDetail() {
      RENDER
      ================================================================ */
   return (
-    <div style={{ padding: '1.5rem', background: '#f1f5f9', minHeight: '100vh' }}>
+    <div style={{ padding: '1.5rem 1rem', background: '#f3f4f6', minHeight: '100vh' }}>
 
       {/* ================================================================
           ACTION BAR (hidden on print)
           ================================================================ */}
-      <div className="no-print" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', maxWidth: 1000, margin: '0 auto 1rem', flexWrap: 'wrap', gap: '0.75rem' }}>
+      <div className="no-print" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', maxWidth: '794px', margin: '0 auto 1rem', flexWrap: 'wrap', gap: '0.75rem' }}>
         {/* Left: back link */}
         <Link to="/invoices" style={{ color: '#64748b', textDecoration: 'none', display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.875rem', fontWeight: 500 }}>
           <ArrowLeft size={16} /> Back to Invoices
@@ -355,7 +356,7 @@ export default function InvoiceDetail() {
             <Printer size={16} /> Print
           </button>
 
-          <button onClick={handleDownload} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 16px', borderRadius: 6, border: 'none', background: '#f59e0b', color: '#fff', cursor: 'pointer', fontSize: '0.85rem', fontWeight: 600 }}>
+          <button onClick={handleDownload} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 16px', borderRadius: 6, border: 'none', background: '#f07030', color: '#fff', cursor: 'pointer', fontSize: '0.85rem', fontWeight: 600 }}>
             <Download size={16} /> Download PDF
           </button>
         </div>
@@ -363,9 +364,11 @@ export default function InvoiceDetail() {
 
       {/* ================================================================
           TAB 1: G702 — APPLICATION FOR PAYMENT
+          Wrapper div captures both pages for PDF download.
           ================================================================ */}
       {activeTab === 'g702' && (
-        <div id="invoice-g702-content" style={pageStyle}>
+        <div id="invoice-g702-content">
+        <div style={pageStyle}>
 
           {/* PAID watermark */}
           {status === 'Paid' && (
@@ -386,30 +389,29 @@ export default function InvoiceDetail() {
             </div>
           </div>
 
-          {/* TOP: Logo + Title + Distribution */}
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 20, position: 'relative', zIndex: 1 }}>
+          {/* TOP: Logo + Title */}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, position: 'relative', zIndex: 1 }}>
             <Logo />
-            <div style={{ textAlign: 'right' }}>
-              <div style={{ fontSize: '1.5rem', fontWeight: 800, color: '#0f172a' }}>Application for Payment #{invoice.applicationNo}</div>
-              {/* Distribution checkboxes */}
-              <div style={{ marginTop: 12, fontSize: '0.7rem', fontWeight: 600, textAlign: 'right' }}>
-                <div style={{ marginBottom: 3 }}>Distribution to:</div>
-                <div style={{ display: 'flex', gap: 16, justifyContent: 'flex-end', fontSize: '0.75rem' }}>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                    <input type="checkbox" checked={invoice.distributionOwner} disabled style={{ width: 12, height: 12 }} />
-                    OWNER
-                  </label>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                    <input type="checkbox" checked={invoice.distributionArchitect} disabled style={{ width: 12, height: 12 }} />
-                    ARCHITECT
-                  </label>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                    <input type="checkbox" checked={invoice.distributionContractor} disabled style={{ width: 12, height: 12 }} />
-                    CONTRACTOR
-                  </label>
-                </div>
-              </div>
+            <div style={{ fontSize: '1.35rem', fontWeight: 800, color: '#0f172a', textAlign: 'right' }}>
+              Application for Payment #{invoice.applicationNo}
             </div>
+          </div>
+
+          {/* Distribution checkboxes — single line */}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 20, marginBottom: 16, fontSize: '0.72rem', fontWeight: 600 }}>
+            <span style={{ color: '#666', marginRight: 4 }}>Distribution to:</span>
+            <label style={{ display: 'inline-flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap' }}>
+              <input type="checkbox" checked={invoice.distributionOwner} disabled style={{ width: 12, height: 12, margin: 0 }} />
+              OWNER
+            </label>
+            <label style={{ display: 'inline-flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap' }}>
+              <input type="checkbox" checked={invoice.distributionArchitect} disabled style={{ width: 12, height: 12, margin: 0 }} />
+              ARCHITECT
+            </label>
+            <label style={{ display: 'inline-flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap' }}>
+              <input type="checkbox" checked={invoice.distributionContractor} disabled style={{ width: 12, height: 12, margin: 0 }} />
+              CONTRACTOR
+            </label>
           </div>
 
           {/* INFO GRID — 3 columns (with subcontractor field if applicable) */}
@@ -463,10 +465,10 @@ export default function InvoiceDetail() {
           </table>
 
           {/* TWO-COLUMN SECTION: Lines 1-9 (left) + Certification/Signature (right) */}
-          <div style={{ display: 'flex', gap: 0, marginBottom: 20 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '55% 45%', border: '2px solid #000', marginBottom: 20, width: '100%', boxSizing: 'border-box' }}>
 
             {/* LEFT — Lines 1-9 */}
-            <div style={{ width: '55%', ...outerBorder, borderRight: 'none' }}>
+            <div style={{ borderRight: '2px solid #000', overflow: 'hidden' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                 <tbody>
                   {[
@@ -510,7 +512,7 @@ export default function InvoiceDetail() {
             </div>
 
             {/* RIGHT — Certification Text + Signature Block */}
-            <div style={{ width: '45%', ...outerBorder, padding: '12px 14px', fontSize: '0.75rem', lineHeight: 1.5, color: '#334155' }}>
+            <div style={{ padding: '12px 14px', fontSize: '0.75rem', lineHeight: 1.5, color: '#334155' }}>
               
               {/* Certification paragraph */}
               {invoice.isSubcontractorVersion ? (
@@ -551,23 +553,40 @@ export default function InvoiceDetail() {
             </div>
           </div>
 
-          {/* BOTTOM TWO-COLUMN: Change Order Summary + Certificate for Payment */}
-          <div style={{ display: 'flex', gap: 0 }}>
+        </div>
 
-            {/* LEFT — Change Order Summary (AIA G702 Format) */}
-            <div style={{ width: '45%', ...outerBorder, borderRight: 'none', padding: 0 }}>
+        {/* ── Page break trigger for PDF ── */}
+        <div className="html2pdf__page-break" style={{ height: 0, overflow: 'hidden', margin: 0, padding: 0 }} />
+
+        {/* ══════════════════════════════════════════════════════════════
+            G702 PAGE 2 — Change Order Summary + Certificate for Payment
+            Same width/padding as page 1 for perfect column alignment.
+            ══════════════════════════════════════════════════════════════ */}
+        <div style={pageStyle}>
+
+          {/* Page 2 header */}
+          <div style={{ borderBottom: '2px solid #000', paddingBottom: 8, marginBottom: 20 }}>
+            <div style={{ fontSize: '0.8rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: '#0f172a' }}>
+              APPLICATION AND CERTIFICATION FOR PAYMENT — CONTINUED
+              <span style={{ float: 'right', fontSize: '0.75rem', fontStyle: 'italic' }}>AIA DOCUMENT G702</span>
+            </div>
+          </div>
+
+          {/* Two-column grid: same 55/45 split as page 1 */}
+          <div style={{ display: 'grid', gridTemplateColumns: '55% 45%', border: '2px solid #000', width: '100%', boxSizing: 'border-box' }}>
+
+            {/* LEFT — Change Order Summary */}
+            <div style={{ borderRight: '2px solid #000', padding: 0 }}>
               <div style={{ background: '#f8fafc', padding: '6px 10px', borderBottom: '1px solid #999', fontWeight: 700, fontSize: '0.75rem', textTransform: 'uppercase' }}>
                 Change Order Summary
               </div>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.72rem' }}>
-                <thead>
+                <tbody>
                   <tr>
                     <th style={{ ...cellBorder, borderLeft: 'none', borderRight: 'none', textAlign: 'left', fontWeight: 600, fontSize: '0.68rem' }}>&nbsp;</th>
                     <th style={{ ...cellBorder, borderLeft: 'none', borderRight: 'none', textAlign: 'right', fontWeight: 600, fontSize: '0.68rem' }}>Additions</th>
                     <th style={{ ...cellBorder, borderLeft: 'none', borderRight: 'none', textAlign: 'right', fontWeight: 600, fontSize: '0.68rem' }}>Deductions</th>
                   </tr>
-                </thead>
-                <tbody>
                   <tr>
                     <td style={{ padding: '4px 10px', borderBottom: '1px solid #ddd' }}>Total changes approved in previous months by Owner</td>
                     <td style={{ padding: '4px 10px', borderBottom: '1px solid #ddd', textAlign: 'right', color: '#d97706', fontWeight: 600 }}>{formatCurrency(invoice.coPreviousAdditions)}</td>
@@ -591,7 +610,7 @@ export default function InvoiceDetail() {
             </div>
 
             {/* RIGHT — Certificate for Payment */}
-            <div style={{ width: '55%', ...outerBorder, padding: 0 }}>
+            <div style={{ padding: 0 }}>
               <div style={{ background: '#f8fafc', padding: '6px 10px', borderBottom: '1px solid #999', fontWeight: 700, fontSize: '0.75rem', textTransform: 'uppercase' }}>
                 Certificate for Payment
               </div>
@@ -623,6 +642,7 @@ export default function InvoiceDetail() {
               </div>
             </div>
           </div>
+        </div>
         </div>
       )}
 
