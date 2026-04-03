@@ -1,6 +1,7 @@
 import { useParams, Link } from 'react-router-dom';
 import { ArrowLeft, Printer, Download, HardHat } from 'lucide-react';
 import { estimates, clients } from '../data/mockData';
+import { downloadPdf } from '../utils/downloadPdf';
 
 const statusBadge = (status) => {
   const map = {
@@ -41,18 +42,18 @@ export default function EstimateDetail() {
         <Link to="/estimates" style={{ color: '#64748b', textDecoration: 'none', display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.875rem', fontWeight: 500 }}>
           <ArrowLeft size={16} /> Back to Estimates
         </Link>
-        <div style={{ display: 'flex', gap: '0.75rem' }}>
+        <div className="no-print" style={{ display: 'flex', gap: '0.75rem' }}>
           <button className="btn-secondary" onClick={() => window.print()}>
             <Printer size={16} /> Print
           </button>
-          <button className="btn-primary" onClick={() => alert('PDF download is a placeholder.')}>
+          <button className="btn-primary" onClick={() => downloadPdf('estimate-pdf-content', `Estimate-${estimate.id}`)}>
             <Download size={16} /> Download PDF
           </button>
         </div>
       </div>
 
       {/* Printable Estimate */}
-      <div className="card" style={{ padding: '2.5rem', maxWidth: '850px', margin: '0 auto' }}>
+      <div id="estimate-pdf-content" className="card" style={{ padding: '2.5rem', maxWidth: '850px', margin: '0 auto' }}>
         {/* Company Header */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '2rem', paddingBottom: '1.5rem', borderBottom: '2px solid #f59e0b' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>

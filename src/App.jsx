@@ -24,9 +24,6 @@ import SubcontractorCreate from './pages/SubcontractorCreate';
 import Invoices from './pages/Invoices';
 import InvoiceDetail from './pages/InvoiceDetail';
 import InvoiceCreate from './pages/InvoiceCreate';
-import PayApplications from './pages/PayApplications';
-import PayApplicationDetail from './pages/PayApplicationDetail';
-import PayApplicationCreate from './pages/PayApplicationCreate';
 import LienWaivers from './pages/LienWaivers';
 import LienWaiverDetail from './pages/LienWaiverDetail';
 import LienWaiverCreate from './pages/LienWaiverCreate';
@@ -89,11 +86,10 @@ function App() {
           <Route path="invoices/create" element={<InvoiceCreate />} />
           <Route path="invoices/:id" element={<InvoiceDetail />} />
 
-          {/* Pay Applications */}
-          <Route path="pay-applications" element={<PayApplications />} />
-          <Route path="pay-applications/create" element={<PayApplicationCreate />} />
-          <Route path="pay-applications/sub/:id" element={<PayApplicationDetail />} />
-          <Route path="pay-applications/:id" element={<PayApplicationDetail />} />
+          {/* Pay Applications — redirect to invoices (Invoice = G702) */}
+          <Route path="pay-applications" element={<Invoices />} />
+          <Route path="pay-applications/create" element={<InvoiceCreate />} />
+          <Route path="pay-applications/:id" element={<InvoiceDetail />} />
 
           {/* Lien Waivers */}
           <Route path="lien-waivers" element={<LienWaivers />} />

@@ -1,7 +1,9 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, Plus, X, Save, Send, FileText, Calculator } from 'lucide-react';
-import { projects, clients, estimates } from '../data/mockData';
+import { ArrowLeft, Plus, X, Save, Send, FileText, Calculator, Loader2, FileCheck } from 'lucide-react';
+import { projects as mockProjects, clients as mockClients, estimates as mockEstimates } from '../data/mockData';
+import { payAppService, projectService, lienWaiverService } from '../services/supabaseService';
+import { useSupabase } from '../hooks/useSupabase';
 
 const formatCurrency = (amount) =>
   new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(amount);
@@ -23,6 +25,9 @@ const emptyLineItem = (itemNum = 1) => ({
 export default function PayApplicationCreate() {
   const navigate = useNavigate();
 
+  // Fetch projects from Supabase with mock fallback
+  const { data: projectsList, usingMock: usingMockProjects } = useSupabase(projectService.list, mockProjects);
+
   // Project information
   const [projectId, setProjectId] = useState('');
   const [applicationNumber, setApplicationNumber] = useState('1');
@@ -30,6 +35,7 @@ export default function PayApplicationCreate() {
   const [ownerName, setOwnerName] = useState('');
   const [contractDate, setContractDate] = useState('');
   const [contractFor, setContractFor] = useState('');
+  const [contractorName, setContractorName] = useState('Boulder Construction');
 
   // Architect information
   const [architectName, setArchitectName] = useState('');
@@ -48,6 +54,11 @@ export default function PayApplicationCreate() {
   // Previous certificates
   const [previousCertificates, setPreviousCertificates] = useState(0);
 
+  // Saving state
+  const [saving, setSaving] = useState(false);
+  const [createdPayApp, setCreatedPayApp] = useState(null);
+  const [generatingWaiver, setGeneratingWaiver] = useState(false);
+
   // Auto-fill when project is selected
   useEffect(() => {
     if (!projectId) {
@@ -59,36 +70,49 @@ export default function PayApplicationCreate() {
       return;
     }
 
-    const project = projects.find((p) => p.id === projectId);
+    // Try Supabase project first (snake_case), then mock (camelCase)
+    const project = projectsList.find((p) => p.id === projectId);
     if (!project) return;
 
-    // Fill owner from client
-    const client = clients.find((c) => c.id === project.clientId);
-    setOwnerName(client ? `${client.name} — ${client.company}` : project.client);
-    setContractDate(project.startDate || '');
-    setContractFor(project.description || project.name);
-    setOriginalContractSum(project.budget || 0);
+    // Support both Supabase snake_case and mock camelCase
+    const clientId = project.client_id ?? project.clientId;
+    const projectName = project.name ?? project.project_name ?? '';
 
-    // Try to find matching estimate and pre-populate line items
-    const matchingEstimate = estimates.find(
-      (e) => e.clientId === project.clientId && e.projectName === project.name
-    );
+    // Fill owner — try to find client from mock data (since clients may not be in Supabase yet)
+    if (usingMockProjects) {
+      const client = mockClients.find((c) => c.id === clientId);
+      setOwnerName(client ? `${client.name} — ${client.company}` : project.client || '');
+    } else {
+      setOwnerName(project.owner_name ?? project.client ?? '');
+    }
 
-    if (matchingEstimate && matchingEstimate.lineItems && matchingEstimate.lineItems.length > 0) {
-      setLineItems(
-        matchingEstimate.lineItems.map((item, idx) => ({
-          itemNumber: idx + 1,
-          description: item.description,
-          scheduledValue: item.total || 0,
-          previousApplication: 0,
-          thisPeriod: 0,
-          materialsStored: 0,
-        }))
+    setContractDate(project.start_date ?? project.startDate ?? '');
+    setContractFor(project.description ?? projectName);
+    setOriginalContractSum(project.budget ?? 0);
+
+    // Try to find matching estimate and pre-populate line items (mock only)
+    if (usingMockProjects) {
+      const matchingEstimate = mockEstimates.find(
+        (e) => e.clientId === clientId && e.projectName === projectName
       );
+      if (matchingEstimate && matchingEstimate.lineItems && matchingEstimate.lineItems.length > 0) {
+        setLineItems(
+          matchingEstimate.lineItems.map((item, idx) => ({
+            itemNumber: idx + 1,
+            description: item.description,
+            scheduledValue: item.total || 0,
+            previousApplication: 0,
+            thisPeriod: 0,
+            materialsStored: 0,
+          }))
+        );
+      } else {
+        setLineItems([emptyLineItem(1)]);
+      }
     } else {
       setLineItems([emptyLineItem(1)]);
     }
-  }, [projectId]);
+  }, [projectId, projectsList, usingMockProjects]);
 
   // Line item helpers
   const updateLineItem = (index, field, value) => {
@@ -141,10 +165,94 @@ export default function PayApplicationCreate() {
   const currentPaymentDue = totalEarnedLessRetainage - (parseCurrency(previousCertificates) || 0);
   const balanceToFinish = totals.scheduledValue - totalCompletedAndStored;
 
-  const handleSave = (asDraft) => {
+  const handleSave = async (asDraft) => {
     const status = asDraft ? 'Draft' : 'Submitted';
-    alert(`Pay Application saved as "${status}" (UI only). Current Payment Due: ${formatCurrency(currentPaymentDue)}`);
-    navigate('/pay-applications');
+    setSaving(true);
+
+    // Build line items for Supabase (snake_case)
+    const supabaseLineItems = lineItems.map((li) => {
+      const tc = rowTotalCompleted(li);
+      const sv = li.scheduledValue || 0;
+      const pct = sv > 0 ? (tc / sv) * 100 : 0;
+      const bf = sv - tc;
+      const ret = tc * ((retainagePercent || 0) / 100);
+      return {
+        item_no: li.itemNumber,
+        description: li.description,
+        scheduled_value: sv,
+        previous_application: li.previousApplication || 0,
+        this_period: li.thisPeriod || 0,
+        materials_stored: li.materialsStored || 0,
+        total_completed: tc,
+        percent_complete: parseFloat(pct.toFixed(2)),
+        balance_to_finish: bf,
+        retainage: parseFloat(ret.toFixed(2)),
+      };
+    });
+
+    // Calculate summary using payAppService.calcSummary
+    const summary = payAppService.calcSummary(
+      supabaseLineItems,
+      parseCurrency(originalContractSum),
+      parseCurrency(netChangeOrders),
+      retainagePercent || 0,
+      parseCurrency(previousCertificates)
+    );
+
+    // Build pay application record for Supabase
+    const payApp = {
+      application_no: parseInt(applicationNumber, 10) || 1,
+      project_id: projectId || null,
+      project_name: contractFor || '',
+      owner_name: ownerName,
+      contractor_name: contractorName,
+      architect_name: architectName,
+      contract_for: contractFor,
+      contract_date: contractDate || null,
+      period_to: periodTo || null,
+      application_date: new Date().toISOString().split('T')[0],
+      original_contract_sum: parseCurrency(originalContractSum),
+      net_change_orders: parseCurrency(netChangeOrders),
+      retainage_percent: retainagePercent || 0,
+      less_previous_certificates: parseCurrency(previousCertificates),
+      status,
+      // Calculated fields from calcSummary
+      ...summary,
+    };
+
+    try {
+      const created = await payAppService.create(payApp, supabaseLineItems);
+      setCreatedPayApp(created);
+      if (!asDraft) {
+        // Short delay so user can see the "Generate Lien Waiver" button
+        // before navigating (only on submit, not draft)
+      }
+      navigate('/pay-applications');
+    } catch (err) {
+      console.warn('Supabase save failed:', err.message);
+      // Fallback: just show alert and navigate anyway
+      alert(`Pay Application saved as "${status}" (mock mode). Current Payment Due: ${formatCurrency(currentPaymentDue)}`);
+      navigate('/pay-applications');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleGenerateWaiver = async () => {
+    if (!createdPayApp) return;
+    setGeneratingWaiver(true);
+    try {
+      await lienWaiverService.generateFromPayApp(createdPayApp, {
+        company: contractorName || 'Boulder Construction',
+        name: ownerName,
+        title: 'Project Manager',
+      });
+      alert('Lien waiver (K2) generated successfully!');
+    } catch (err) {
+      alert('Failed to generate waiver: ' + err.message);
+    } finally {
+      setGeneratingWaiver(false);
+    }
   };
 
   const labelStyle = {
@@ -180,15 +288,28 @@ export default function PayApplicationCreate() {
           <h1 className="page-title">Create Pay Application</h1>
           <p style={{ color: '#64748b', fontSize: '0.875rem', marginTop: '0.25rem' }}>AIA G702/G703 — Application and Certificate for Payment</p>
         </div>
-        <div style={{ display: 'flex', gap: '0.75rem' }}>
-          <button className="btn-secondary" onClick={() => handleSave(true)}>
-            <Save size={16} /> Save as Draft
+        <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
+          {createdPayApp && (
+            <button
+              className="btn-secondary"
+              onClick={handleGenerateWaiver}
+              disabled={generatingWaiver}
+              style={{ opacity: generatingWaiver ? 0.6 : 1 }}
+            >
+              <FileCheck size={16} /> {generatingWaiver ? 'Generating...' : 'Generate Lien Waiver'}
+            </button>
+          )}
+          <button className="btn-secondary" onClick={() => handleSave(true)} disabled={saving}>
+            <Save size={16} /> {saving ? 'Saving...' : 'Save as Draft'}
           </button>
-          <button className="btn-primary" onClick={() => handleSave(false)}>
-            <Send size={16} /> Submit for Review
+          <button className="btn-primary" onClick={() => handleSave(false)} disabled={saving}>
+            {saving ? <Loader2 size={16} style={{ animation: 'spin 1s linear infinite' }} /> : <Send size={16} />}
+            {saving ? 'Submitting...' : 'Submit for Review'}
           </button>
         </div>
       </div>
+
+      <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
 
       {/* ============ PROJECT INFORMATION ============ */}
       <div className="card" style={{ padding: '1.5rem', marginBottom: '1.5rem' }}>
@@ -199,8 +320,8 @@ export default function PayApplicationCreate() {
             <label style={labelStyle}>Project</label>
             <select className="input" value={projectId} onChange={(e) => setProjectId(e.target.value)}>
               <option value="">— Select Project —</option>
-              {projects.map((p) => (
-                <option key={p.id} value={p.id}>{p.name}</option>
+              {projectsList.map((p) => (
+                <option key={p.id} value={p.id}>{p.name ?? p.project_name ?? p.id}</option>
               ))}
             </select>
           </div>
@@ -455,7 +576,7 @@ export default function PayApplicationCreate() {
               }}
             >
               <span style={{ fontSize: '0.875rem', color: row.bold ? '#1e293b' : '#475569', fontWeight: row.bold ? 700 : 500 }}>
-                {row.subtract ? '(−) ' : ''}{row.label}
+                {row.subtract ? '(-) ' : ''}{row.label}
               </span>
               {row.editable ? (
                 <input
@@ -476,11 +597,22 @@ export default function PayApplicationCreate() {
 
       {/* Bottom Action Buttons */}
       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem', paddingTop: '0.5rem', paddingBottom: '2rem' }}>
-        <button className="btn-secondary" onClick={() => handleSave(true)}>
-          <Save size={16} /> Save as Draft
+        {createdPayApp && (
+          <button
+            className="btn-secondary"
+            onClick={handleGenerateWaiver}
+            disabled={generatingWaiver}
+            style={{ opacity: generatingWaiver ? 0.6 : 1 }}
+          >
+            <FileCheck size={16} /> {generatingWaiver ? 'Generating...' : 'Generate Lien Waiver'}
+          </button>
+        )}
+        <button className="btn-secondary" onClick={() => handleSave(true)} disabled={saving}>
+          <Save size={16} /> {saving ? 'Saving...' : 'Save as Draft'}
         </button>
-        <button className="btn-primary" onClick={() => handleSave(false)}>
-          <Send size={16} /> Submit for Review
+        <button className="btn-primary" onClick={() => handleSave(false)} disabled={saving}>
+          {saving ? <Loader2 size={16} style={{ animation: 'spin 1s linear infinite' }} /> : <Send size={16} />}
+          {saving ? 'Submitting...' : 'Submit for Review'}
         </button>
       </div>
     </div>

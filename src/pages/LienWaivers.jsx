@@ -1,7 +1,9 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { FileText, Plus, AlertCircle, DollarSign, Eye, Download, Filter } from 'lucide-react';
-import { lienWaivers, projects } from '../data/mockData';
+import { FileText, Plus, AlertCircle, DollarSign, Eye, Download, Filter, Loader2 } from 'lucide-react';
+import { lienWaiverService } from '../services/supabaseService';
+import { useSupabase } from '../hooks/useSupabase';
+import { lienWaivers as mockLienWaivers } from '../data/mockData';
 
 const formatCurrency = (amount) =>
   new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(amount);
@@ -15,33 +17,68 @@ const statusBadge = (status) => {
   return map[status] || 'badge-gray';
 };
 
-const formTypeLabel = {
-  K2: 'K2 - Conditional Progress',
-  K4: 'K4 - Unconditional Progress',
-};
+/** Normalize a waiver row so both snake_case (Supabase) and camelCase (mock) fields are accessible */
+function normalizeWaiver(w) {
+  const category = w.waiver_category || w.waiverCategory || 'Partial';
+  const condition = w.condition_type || w.conditionType || 'Conditional';
+  const waiverAmt = w.waiver_amount ?? w.waiverAmount ?? 0;
+  const finalBal = w.final_balance ?? w.finalBalance ?? 0;
+  return {
+    id: w.id,
+    waiverCategory: category,
+    conditionType: condition,
+    typeLabel: `${category} \u00B7 ${condition}`,
+    projectName: w.project_name || w.projectName || '',
+    projectId: w.project_id || w.projectId || '',
+    signerCompany: w.signer_company || w.signerCompany || '',
+    signerName: w.signer_name || w.signerName || '',
+    furnisher: w.furnisher || '',
+    amount: category === 'Final' ? Number(finalBal) : Number(waiverAmt),
+    date: w.waiver_date || w.date || '',
+    status: w.status || '',
+  };
+}
 
 export default function LienWaivers() {
+  const { data: rawWaivers, loading } = useSupabase(lienWaiverService.list, mockLienWaivers);
+
   const [projectFilter, setProjectFilter] = useState('All');
   const [statusFilter, setStatusFilter] = useState('All');
-  const [formTypeFilter, setFormTypeFilter] = useState('All');
+  const [categoryFilter, setCategoryFilter] = useState('All');
+  const [outstandingOnly, setOutstandingOnly] = useState(false);
 
-  // Summary calculations
-  const totalWaivers = lienWaivers.length;
-  const pendingSignature = lienWaivers.filter((w) => w.status === 'Pending Signature').length;
-  const totalReleased = lienWaivers
+  // Normalize all waivers for consistent field access
+  const waivers = rawWaivers.map(normalizeWaiver);
+
+  // Summary calculations from live data
+  const totalWaivers = waivers.length;
+  const pendingSignature = waivers.filter((w) => w.status === 'Pending Signature').length;
+  const totalReleased = waivers
     .filter((w) => w.status === 'Signed')
-    .reduce((sum, w) => sum + w.checkAmount, 0);
+    .reduce((sum, w) => sum + (w.amount || 0), 0);
 
   // Filtered list
-  const filtered = lienWaivers.filter((w) => {
+  const filtered = waivers.filter((w) => {
     if (projectFilter !== 'All' && w.projectName !== projectFilter) return false;
     if (statusFilter !== 'All' && w.status !== statusFilter) return false;
-    if (formTypeFilter !== 'All' && w.formType !== formTypeFilter) return false;
+    if (categoryFilter !== 'All' && w.waiverCategory !== categoryFilter) return false;
+    if (outstandingOnly && w.status === 'Signed') return false;
     return true;
   });
 
   // Unique project names for filter
-  const projectNames = [...new Set(lienWaivers.map((w) => w.projectName))];
+  const projectNames = [...new Set(waivers.map((w) => w.projectName).filter(Boolean))];
+
+  if (loading) {
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center justify-center py-20">
+          <Loader2 size={32} className="animate-spin text-blue-500" />
+          <span className="ml-3 text-gray-500 text-lg">Loading lien waivers...</span>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -49,7 +86,7 @@ export default function LienWaivers() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="page-title">Lien Waivers</h1>
-          <p className="text-gray-500 text-sm mt-1">Manage conditional and unconditional waivers for all projects</p>
+          <p className="text-gray-500 text-sm mt-1">Manage affidavit, release and waiver of lien documents for all projects</p>
         </div>
         <Link to="/lien-waivers/create" className="btn-primary" style={{ textDecoration: 'none' }}>
           <Plus size={16} className="inline mr-1.5 -mt-0.5" />
@@ -97,6 +134,22 @@ export default function LienWaivers() {
       {/* Filter row */}
       <div className="flex flex-wrap items-center gap-3">
         <Filter size={16} className="text-gray-400" />
+        <button
+          onClick={() => setOutstandingOnly((v) => !v)}
+          style={{
+            padding: '0.4rem 0.75rem',
+            borderRadius: '8px',
+            border: `1px solid ${outstandingOnly ? '#dc2626' : '#e2e8f0'}`,
+            fontSize: '0.8rem',
+            fontWeight: 600,
+            color: outstandingOnly ? '#dc2626' : '#64748b',
+            background: outstandingOnly ? '#fee2e2' : '#fff',
+            cursor: 'pointer',
+            transition: 'all 0.15s',
+          }}
+        >
+          Outstanding Only
+        </button>
         <select
           className="input-field w-auto"
           value={projectFilter}
@@ -112,19 +165,19 @@ export default function LienWaivers() {
           value={statusFilter}
           onChange={(e) => setStatusFilter(e.target.value)}
         >
-          <option value="All">All</option>
+          <option value="All">All Statuses</option>
           <option value="Draft">Draft</option>
           <option value="Pending Signature">Pending Signature</option>
           <option value="Signed">Signed</option>
         </select>
         <select
           className="input-field w-auto"
-          value={formTypeFilter}
-          onChange={(e) => setFormTypeFilter(e.target.value)}
+          value={categoryFilter}
+          onChange={(e) => setCategoryFilter(e.target.value)}
         >
-          <option value="All">All</option>
-          <option value="K2">K2 - Conditional Progress</option>
-          <option value="K4">K4 - Unconditional Progress</option>
+          <option value="All">All Types</option>
+          <option value="Partial">Partial Waiver</option>
+          <option value="Final">Final Waiver</option>
         </select>
       </div>
 
@@ -135,9 +188,9 @@ export default function LienWaivers() {
             <thead>
               <tr className="text-left text-sm text-gray-500 border-b border-gray-100">
                 <th className="pb-3 pl-4 font-medium">Waiver ID</th>
-                <th className="pb-3 font-medium">Form Type</th>
+                <th className="pb-3 font-medium">Type</th>
                 <th className="pb-3 font-medium">Project</th>
-                <th className="pb-3 font-medium">Signer Company</th>
+                <th className="pb-3 font-medium">Furnisher / Company</th>
                 <th className="pb-3 font-medium text-right">Amount</th>
                 <th className="pb-3 font-medium">Date</th>
                 <th className="pb-3 font-medium">Status</th>
@@ -152,10 +205,10 @@ export default function LienWaivers() {
                       {w.id}
                     </Link>
                   </td>
-                  <td className="py-3 text-sm">{formTypeLabel[w.formType]}</td>
+                  <td className="py-3 text-sm">{w.typeLabel}</td>
                   <td className="py-3 text-sm">{w.projectName}</td>
-                  <td className="py-3 text-sm">{w.signerCompany}</td>
-                  <td className="py-3 text-sm text-right">{formatCurrency(w.checkAmount)}</td>
+                  <td className="py-3 text-sm">{w.furnisher || w.signerCompany}</td>
+                  <td className="py-3 text-sm text-right">{formatCurrency(w.amount)}</td>
                   <td className="py-3 text-sm">{w.date}</td>
                   <td className="py-3">
                     <span className={`badge ${statusBadge(w.status)}`}>{w.status}</span>

@@ -1,12 +1,20 @@
+import { useState, useCallback } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { ArrowLeft, Printer, Download, CheckCircle } from 'lucide-react';
-import { lienWaivers } from '../data/mockData';
+import { ArrowLeft, Printer, Download, CheckCircle, Loader2 } from 'lucide-react';
+import { lienWaiverService } from '../services/supabaseService';
+import { useSupabaseById } from '../hooks/useSupabase';
+import { lienWaivers as mockLienWaivers } from '../data/mockData';
+import { downloadPdf } from '../utils/downloadPdf';
 
 const formatCurrency = (amount) =>
   new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(amount);
 
-const formatDate = (dateStr) =>
-  new Date(dateStr).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+const formatDate = (dateStr) => {
+  if (!dateStr) return '';
+  const d = new Date(dateStr);
+  const months = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+  return `${months[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`;
+};
 
 const statusBadge = (status) => {
   const map = {
@@ -17,25 +25,29 @@ const statusBadge = (status) => {
   return map[status] || 'badge-gray';
 };
 
-/* Styled underline field — renders the value with an underline to mimic a filled blank */
-const Field = ({ value, minWidth = 80 }) => (
-  <span
-    style={{
-      borderBottom: '1px solid #000',
-      padding: '0 4px 1px',
-      minWidth,
-      display: 'inline-block',
-      fontWeight: 500,
-    }}
-  >
-    {value || '\u00A0\u00A0\u00A0\u00A0\u00A0\u00A0\u00A0\u00A0\u00A0\u00A0\u00A0\u00A0\u00A0\u00A0\u00A0\u00A0'}
-  </span>
-);
-
-/* Parenthetical label that floats toward the right margin */
-const Label = ({ children }) => (
-  <span style={{ fontSize: '0.8rem', color: '#444', fontStyle: 'italic' }}>({children})</span>
-);
+/** Normalize a waiver from either Supabase (snake_case) or mock (camelCase) into a consistent shape */
+function normalizeWaiver(w) {
+  if (!w) return null;
+  return {
+    id: w.id,
+    waiverCategory: w.waiver_category || w.waiverCategory || 'Partial',
+    conditionType: w.condition_type || w.conditionType || 'Conditional',
+    projectName: w.project_name || w.projectName || '',
+    projectId: w.project_id || w.projectId || '',
+    signerName: w.signer_name || w.signerName || '',
+    furnisher: w.furnisher || '',
+    ownerContractor: w.owner_contractor || w.ownerContractor || '',
+    jobNameAddress: w.job_name_address || w.jobNameAddress || '',
+    waiverAmount: w.waiver_amount ?? w.waiverAmount ?? 0,
+    finalBalance: w.final_balance ?? w.finalBalance ?? 0,
+    paymentCondition: w.payment_condition || w.paymentCondition || '',
+    signerCompany: w.signer_company || w.signerCompany || '',
+    signerTitle: w.signer_title || w.signerTitle || '',
+    relatedPayApp: w.pay_application_id || w.relatedPayApp || '',
+    date: w.waiver_date || w.date || '',
+    status: w.status || '',
+  };
+}
 
 /* Print styles injected once */
 const PrintStyles = () => (
@@ -48,9 +60,72 @@ const PrintStyles = () => (
   `}</style>
 );
 
+/* Underline blank field for the form */
+const BlankLine = ({ width = 200, value = '' }) => (
+  <span
+    style={{
+      borderBottom: '1px solid #000',
+      display: 'inline-block',
+      minWidth: width,
+      padding: '0 4px 1px',
+      fontWeight: 500,
+      textAlign: 'center',
+    }}
+  >
+    {value || '\u00A0'}
+  </span>
+);
+
+/* Italic caption label below fields */
+const Caption = ({ children, style = {} }) => (
+  <span style={{ display: 'block', fontSize: '0.65rem', fontStyle: 'italic', color: '#555', textAlign: 'center', marginTop: 1, ...style }}>
+    {children}
+  </span>
+);
+
+/* Checkbox square */
+const Checkbox = ({ checked }) => (
+  <span
+    style={{
+      display: 'inline-block',
+      width: 13,
+      height: 13,
+      border: '1.5px solid #000',
+      marginRight: 5,
+      position: 'relative',
+      top: 2,
+      textAlign: 'center',
+      lineHeight: '11px',
+      fontSize: '0.7rem',
+      fontWeight: 700,
+    }}
+  >
+    {checked ? '\u2713' : ''}
+  </span>
+);
+
 export default function LienWaiverDetail() {
   const { id } = useParams();
-  const waiver = lienWaivers.find((w) => w.id === id);
+  const [signing, setSigning] = useState(false);
+
+  const mockFinder = useCallback(
+    (searchId) => mockLienWaivers.find((w) => w.id === searchId) || null,
+    [],
+  );
+
+  const { data: rawWaiver, loading, setData } = useSupabaseById(lienWaiverService.getById, id, mockFinder);
+  const waiver = normalizeWaiver(rawWaiver);
+
+  if (loading) {
+    return (
+      <div style={{ padding: '1.5rem' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '5rem 0' }}>
+          <Loader2 size={32} className="animate-spin" style={{ color: '#3b82f6' }} />
+          <span style={{ marginLeft: '0.75rem', color: '#64748b', fontSize: '1.125rem' }}>Loading waiver...</span>
+        </div>
+      </div>
+    );
+  }
 
   if (!waiver) {
     return (
@@ -68,26 +143,34 @@ export default function LienWaiverDetail() {
     );
   }
 
-  /* Determine form variant */
-  const isUnconditional = waiver.formType === 'K1' || waiver.formType === 'K3';
-  const isFinal = waiver.formType === 'K3' || waiver.formType === 'K4';
-  const paymentType = isFinal ? 'final payment' : 'progress payment';
-  const paymentTypeTitle = isFinal ? 'Final Payment' : 'Progress Payment';
-
-  const formLabel = `Form ${waiver.formType}`;
-  const formTitle = isUnconditional
-    ? `Unconditional Waiver and Release on ${paymentTypeTitle}`
-    : `Conditional Waiver and Release on ${paymentTypeTitle}`;
+  const isPartial = waiver.waiverCategory === 'Partial';
+  const isFinal = waiver.waiverCategory === 'Final';
+  const isUnconditional = waiver.conditionType === 'Unconditional';
+  const isConditional = waiver.conditionType === 'Conditional';
 
   const handlePrint = () => window.print();
-  const handleDownload = () => alert('PDF download coming soon.');
-  const handleMarkSigned = () => alert(`Waiver ${waiver.id} marked as signed.`);
+  const handleDownload = () => downloadPdf('lien-waiver-pdf-content', `LienWaiver-${waiver.waiverCategory}-${waiver.id}`);
+
+  const handleMarkSigned = async () => {
+    setSigning(true);
+    try {
+      const updated = await lienWaiverService.sign(waiver.id);
+      setData(updated);
+    } catch (err) {
+      console.error('Failed to sign waiver:', err);
+      setData((prev) => (prev ? { ...prev, status: 'Signed', waiver_date: new Date().toISOString().split('T')[0], date: new Date().toISOString().split('T')[0] } : prev));
+    } finally {
+      setSigning(false);
+    }
+  };
+
+  const year = waiver.date ? new Date(waiver.date).getFullYear() : new Date().getFullYear();
 
   /* ---- Styles ---- */
-  const legalFont = {
+  const formFont = {
     fontFamily: "Georgia, 'Times New Roman', Times, serif",
-    fontSize: '0.92rem',
-    lineHeight: 1.75,
+    fontSize: '0.85rem',
+    lineHeight: 1.65,
     color: '#000',
   };
 
@@ -96,10 +179,10 @@ export default function LienWaiverDetail() {
     color: '#000',
     maxWidth: '8.5in',
     margin: '0 auto',
-    padding: '48px 56px',
+    padding: '40px 52px',
     border: '1px solid #d1d5db',
     boxShadow: '0 1px 6px rgba(0,0,0,0.08)',
-    ...legalFont,
+    ...formFont,
   };
 
   const btnStyle = (bg, color) => ({
@@ -116,10 +199,10 @@ export default function LienWaiverDetail() {
     cursor: 'pointer',
   });
 
-  const paragraphStyle = {
-    textIndent: '2em',
-    marginBottom: 16,
-    textAlign: 'justify',
+  const sectionBox = {
+    border: '1px solid #999',
+    padding: '14px 18px',
+    marginBottom: 18,
   };
 
   return (
@@ -140,8 +223,13 @@ export default function LienWaiverDetail() {
         <span className={`badge ${statusBadge(waiver.status)}`}>{waiver.status}</span>
 
         {(waiver.status === 'Draft' || waiver.status === 'Pending Signature') && (
-          <button style={btnStyle('#2563eb', '#fff')} className="btn-primary" onClick={handleMarkSigned}>
-            <CheckCircle size={15} /> Mark as Signed
+          <button
+            style={btnStyle('#2563eb', '#fff')}
+            className="btn-primary"
+            onClick={handleMarkSigned}
+            disabled={signing}
+          >
+            <CheckCircle size={15} /> {signing ? 'Signing...' : 'Mark as Signed'}
           </button>
         )}
 
@@ -154,160 +242,217 @@ export default function LienWaiverDetail() {
         </button>
       </div>
 
-      {/* ===== Printable Form ===== */}
-      <div className="lien-waiver-page" style={formPage}>
-
-        {/* --- Header: Form label centered --- */}
-        <div style={{ textAlign: 'center', marginBottom: 12, fontFamily: 'Arial, Helvetica, sans-serif' }}>
-          <span style={{ fontWeight: 700, fontSize: '1.15rem', letterSpacing: 1 }}>{formLabel}</span>
+      {/* ===== Payment Summary Banner (no-print) ===== */}
+      <div className="no-print" style={{ display: 'flex', gap: '1rem', marginBottom: '1.25rem', flexWrap: 'wrap' }}>
+        <div style={{ flex: 1, minWidth: 180, background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 10, padding: '0.875rem 1.25rem' }}>
+          <p style={{ margin: 0, fontSize: '0.7rem', fontWeight: 600, color: '#16a34a', textTransform: 'uppercase', letterSpacing: '0.05em' }}>This Payment</p>
+          <p style={{ margin: '0.25rem 0 0', fontSize: '1.25rem', fontWeight: 700, color: '#0f172a' }}>
+            {formatCurrency(isPartial ? waiver.waiverAmount : waiver.finalBalance)}
+          </p>
         </div>
-
-        {/* --- Title block: left-aligned, bold --- */}
-        <div style={{ marginBottom: 4, fontFamily: 'Arial, Helvetica, sans-serif' }}>
-          <div style={{ fontWeight: 700, fontSize: '1.05rem', marginBottom: 2 }}>TEXAS</div>
-          <div style={{ fontWeight: 700, fontSize: '1rem', marginBottom: 2 }}>{formTitle}</div>
-          <div style={{ fontSize: '0.85rem', color: '#222' }}>{waiver.statute || 'TEX. PROP. CODE § 53.284'}</div>
-        </div>
-
-        <hr style={{ border: 'none', borderTop: '2px solid #000', margin: '14px 0 18px' }} />
-
-        {/* --- Warning paragraph (unconditional forms only) --- */}
-        {isUnconditional && (
-          <div
-            style={{
-              background: '#000',
-              color: '#fff',
-              padding: '12px 16px',
-              marginBottom: 20,
-              fontSize: '0.85rem',
-              lineHeight: 1.6,
-              fontWeight: 700,
-              fontFamily: "Georgia, 'Times New Roman', Times, serif",
-            }}
-          >
-            This document waives rights unconditionally and states that you have been paid for giving up
-            those rights. It is prohibited for a person to require you to sign this document if you have
-            not been paid the payment amount set forth below. If you have not been paid, use a conditional
-            release form.
+        {isPartial && (
+          <div style={{ flex: 1, minWidth: 180, background: '#fef3c7', border: '1px solid #fde68a', borderRadius: 10, padding: '0.875rem 1.25rem' }}>
+            <p style={{ margin: 0, fontSize: '0.7rem', fontWeight: 600, color: '#d97706', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Remaining Balance</p>
+            <p style={{ margin: '0.25rem 0 0', fontSize: '1.25rem', fontWeight: 700, color: '#0f172a' }}>
+              {formatCurrency(waiver.finalBalance)}
+            </p>
           </div>
         )}
+        <div style={{ flex: 1, minWidth: 180, background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 10, padding: '0.875rem 1.25rem' }}>
+          <p style={{ margin: 0, fontSize: '0.7rem', fontWeight: 600, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Waiver Type</p>
+          <p style={{ margin: '0.25rem 0 0', fontSize: '1rem', fontWeight: 700, color: '#0f172a' }}>
+            {waiver.waiverCategory} &middot; {waiver.conditionType}
+          </p>
+          <span className={`badge ${waiver.waiverCategory === 'Final' ? 'badge-green' : 'badge-blue'}`} style={{ marginTop: 4, display: 'inline-block' }}>
+            {waiver.waiverCategory === 'Final' ? 'Full Release' : 'Partial Release'}
+          </span>
+        </div>
+      </div>
 
-        {/* --- Project / Job No. --- */}
-        <div style={{ display: 'flex', gap: '2rem', marginBottom: 20 }}>
-          <div>
-            <span style={{ fontWeight: 600 }}>Project</span>{' '}
-            <Field value={waiver.projectName} minWidth={200} />
+      {/* ===== Printable Affidavit Form ===== */}
+      <div id="lien-waiver-pdf-content" className="lien-waiver-page" style={formPage}>
+
+        {/* --- Title --- */}
+        <div style={{ textAlign: 'center', marginBottom: 10 }}>
+          <h1 style={{ fontSize: '1.1rem', fontWeight: 700, fontFamily: "Arial, Helvetica, sans-serif", letterSpacing: '0.5px', margin: 0 }}>
+            AFFIDAVIT, RELEASE AND WAIVER OF LIEN
+          </h1>
+        </div>
+
+        {/* --- Partial / Final Checkboxes --- */}
+        <div style={{ textAlign: 'center', marginBottom: 18, fontSize: '0.85rem' }}>
+          <Checkbox checked={isPartial} />
+          <span style={{ fontWeight: 600, marginRight: 24 }}>PARTIAL</span>
+          <Checkbox checked={isFinal} />
+          <span style={{ fontWeight: 600 }}>FINAL</span>
+        </div>
+
+        {/* --- Sworn Statement Line 1: I, ___ being duly sworn, state that ___ --- */}
+        <div style={{ marginBottom: 6 }}>
+          <span>I, </span>
+          <BlankLine width={240} value={waiver.signerName} />
+          <span>being duly sworn, state that </span>
+          <BlankLine width={200} value={waiver.furnisher} />
+        </div>
+        <div style={{ display: 'flex', gap: '2rem', marginBottom: 2 }}>
+          <div style={{ flex: 1 }}>
+            <Caption style={{ textAlign: 'left', marginLeft: 16 }}>Name</Caption>
           </div>
-          <div>
-            <span style={{ fontWeight: 600 }}>Job No.</span>{' '}
-            <Field value={waiver.projectId} minWidth={120} />
+          <div style={{ flex: 1 }}>
+            <Caption style={{ textAlign: 'right' }}>Furnisher</Caption>
           </div>
         </div>
 
-        {/* --- Legal body paragraphs --- */}
-        {isUnconditional ? (
-          /* ===== K1 / K3 — Unconditional ===== */
-          <p style={paragraphStyle}>
-            THE SIGNER of this document has been paid and has received a {paymentType} in the sum of ${' '}
-            <Field value={formatCurrency(waiver.checkAmount)} /> for all labor, services, equipment, or
-            materials furnished to the property or to <Field value={waiver.signerCompany} />{' '}
-            <Label>person with whom signer contracted</Label> on the property of{' '}
-            <Field value={waiver.owner} /> <Label>owner</Label> located at{' '}
-            <Field value={waiver.propertyLocation} /> <Label>location</Label> to the following extent:{' '}
-            <Field value={waiver.jobDescription} /> <Label>job description</Label>.
-          </p>
-        ) : (
-          /* ===== K2 / K4 — Conditional ===== */
-          <p style={paragraphStyle}>
-            ON RECEIPT by the signer of this document of a check from{' '}
-            <Field value={waiver.makerOfCheck} /> <Label>maker of check</Label> in the sum of ${' '}
-            <Field value={formatCurrency(waiver.checkAmount)} /> payable to{' '}
-            <Field value={waiver.payableTo} /> <Label>payee or payees of check</Label> and when the check
-            has been properly endorsed and has been paid by the bank on which it is drawn, this document
-            becomes effective to release any mechanic&rsquo;s lien right, any right arising from a payment
-            bond that complies with a state or federal statute, any common law payment bond right, any claim
-            for payment, and any rights under any similar ordinance, rule, or statute related to claim or
-            payment rights for persons in the signer&rsquo;s position that the signer has on the property of{' '}
-            <Field value={waiver.owner} /> <Label>owner</Label> located at{' '}
-            <Field value={waiver.propertyLocation} /> <Label>location</Label> to the following extent:{' '}
-            <Field value={waiver.jobDescription} /> <Label>job description</Label>.
-          </p>
-        )}
+        {/* --- Line 2: contracted with ___ to furnish certain materials and/or labor for the --- */}
+        <div style={{ marginBottom: 6 }}>
+          <span>contracted with </span>
+          <BlankLine width={320} value={waiver.ownerContractor} />
+          <span> to furnish certain materials and/or labor for the</span>
+        </div>
+        <div style={{ marginBottom: 2 }}>
+          <Caption style={{ textAlign: 'left', marginLeft: 100 }}>Owner or Prime Contractor</Caption>
+        </div>
 
-        {/* Unconditional: second paragraph about waiving rights */}
-        {isUnconditional && (
-          <p style={paragraphStyle}>
-            The signer therefore waives and releases any mechanic&rsquo;s lien right, any right arising from
-            a payment bond that complies with a state or federal statute, any common law payment bond right,
-            any claim for payment, and any rights under any similar ordinance, rule, or statute related to
-            claim or payment rights for persons in the signer&rsquo;s position that the signer has on the
-            above referenced project to the following extent:{' '}
-            <Field value={waiver.jobDescription} />.
-          </p>
-        )}
+        {/* --- Line 3: following project known as ___ and do hereby further state on --- */}
+        <div style={{ marginBottom: 6 }}>
+          <span>following project known as </span>
+          <BlankLine width={340} value={waiver.projectName + (waiver.jobNameAddress ? ' — ' + waiver.jobNameAddress : '')} />
+          <span> and do hereby further state on</span>
+        </div>
+        <div style={{ marginBottom: 2 }}>
+          <Caption style={{ textAlign: 'left', marginLeft: 180 }}>Job Name & Address</Caption>
+        </div>
 
-        <p style={paragraphStyle}>
-          THIS RELEASE covers a {paymentType} for all labor, services, equipment, or materials furnished to
-          the property or to <Field value={waiver.signerCompany} />{' '}
-          <Label>person with whom signer contracted</Label> as indicated in the attached statement(s) or{' '}
-          {paymentType} request(s), except for unpaid retention, pending modifications and changes, or other
-          items furnished.
-        </p>
+        {/* --- Line 4: behalf of the aforementioned Furnisher... --- */}
+        <div style={{ marginBottom: 6 }}>
+          <span>behalf of the aforementioned Furnisher for labor or materials supplied to the project thru the date</span>
+        </div>
 
-        <p style={{ ...paragraphStyle, marginBottom: 28 }}>
-          THE SIGNER warrants that the signer has already paid or will use the funds received from this{' '}
-          {paymentType} to promptly pay in full all of the signer&rsquo;s laborers, subcontractors,
-          materialmen, and suppliers for all work, materials, equipment, or services provided for or to the
-          above referenced project in regard to the attached statement(s) or {paymentType} request(s).
-        </p>
+        {/* --- Line 5: of ___,___,20__ : --- */}
+        <div style={{ marginBottom: 20 }}>
+          <span>of </span>
+          <BlankLine width={80} value={waiver.date ? formatDate(waiver.date).split(',')[0]?.split(' ')[1] : ''} />
+          <span>,</span>
+          <BlankLine width={60} value={waiver.date ? formatDate(waiver.date).split(',')[0]?.split(' ')[0] : ''} />
+          <span>,{year} :</span>
+        </div>
 
-        <hr style={{ border: 'none', borderTop: '1px solid #999', margin: '24px 0' }} />
+        {/* --- AFFIDAVIT Header --- */}
+        <div style={{ textAlign: 'center', fontWeight: 700, fontSize: '0.95rem', marginBottom: 18, fontFamily: "Arial, Helvetica, sans-serif" }}>
+          AFFIDAVIT
+        </div>
 
-        {/* --- Signature block --- */}
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px 40px', marginTop: 12 }}>
+        {/* ============ PARTIAL WAIVER Section ============ */}
+        <div style={sectionBox}>
+          <div style={{ marginBottom: 10 }}>
+            <Checkbox checked={isPartial} />
+            <span style={{ fontWeight: 700, fontSize: '0.85rem' }}> PARTIAL WAIVER:</span>
+            <span>  There is due from </span>
+            <BlankLine width={260} value={isPartial ? waiver.ownerContractor : ''} />
+            <span> the sum of:</span>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', marginBottom: 2 }}>
+            <Caption style={{ textAlign: 'left', flex: 1, marginLeft: 20 }}>Owner or Prime Contractor</Caption>
+            <span style={{ fontWeight: 600, marginLeft: 10 }}>Dollars</span>
+          </div>
+          <div style={{ marginBottom: 12 }}>
+            <span>$</span>
+            <BlankLine width={120} value={isPartial && waiver.waiverAmount ? formatCurrency(waiver.waiverAmount) : ''} />
+          </div>
+
+          <div style={{ paddingLeft: 24 }}>
+            <div style={{ marginBottom: 6 }}>
+              <Checkbox checked={isPartial && isUnconditional} />
+              <span> Receipt of which is hereby acknowledged (unconditional); or</span>
+            </div>
+            <div style={{ marginBottom: 6 }}>
+              <Checkbox checked={isPartial && isConditional} />
+              <span> The payment of which has been promised as the sole consideration of this Affidavit, Release and Partial</span>
+              <div style={{ paddingLeft: 20 }}>
+                <span>Waiver of Lien which is given solely with respect to said amount and is effective upon receipt of such</span>
+              </div>
+              <div style={{ paddingLeft: 20 }}>
+                <span>payment (conditional):</span>
+              </div>
+            </div>
+          </div>
+          <BlankLine width={'100%'} value={isPartial ? waiver.paymentCondition : ''} />
+        </div>
+
+        {/* ============ FINAL WAIVER Section ============ */}
+        <div style={sectionBox}>
+          <div style={{ marginBottom: 10 }}>
+            <Checkbox checked={isFinal} />
+            <span style={{ fontWeight: 700, fontSize: '0.85rem' }}> FINAL WAIVER:</span>
+            <span>  The final balance due from </span>
+            <BlankLine width={220} value={isFinal ? waiver.ownerContractor : ''} />
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', marginBottom: 2 }}>
+            <Caption style={{ textAlign: 'left', flex: 1, marginLeft: 20 }}>Owner or Prime Contractor</Caption>
+            <span style={{ fontWeight: 600, marginLeft: 10 }}>Dollars</span>
+          </div>
+          <div style={{ marginBottom: 12 }}>
+            <span>$</span>
+            <BlankLine width={120} value={isFinal && waiver.finalBalance ? formatCurrency(waiver.finalBalance) : ''} />
+          </div>
+
+          <div style={{ paddingLeft: 24 }}>
+            <div style={{ marginBottom: 6 }}>
+              <Checkbox checked={isFinal && isUnconditional} />
+              <span> Receipt of which is hereby acknowledged (unconditional); or</span>
+            </div>
+            <div style={{ marginBottom: 6 }}>
+              <Checkbox checked={isFinal && isConditional} />
+              <span> The payment of which has been promised as the sole consideration of this Affidavit, Release and Partial</span>
+              <div style={{ paddingLeft: 20 }}>
+                <span>Waiver of Lien  which is given solely with respect to said amount and is effective upon receipt of such</span>
+              </div>
+              <div style={{ paddingLeft: 20 }}>
+                <span>payment (conditional):</span>
+              </div>
+            </div>
+          </div>
+          <BlankLine width={'100%'} value={isFinal ? waiver.paymentCondition : ''} />
+        </div>
+
+        {/* ============ THEREFORE Paragraph ============ */}
+        <div style={{ marginBottom: 18, textAlign: 'justify', fontSize: '0.8rem', lineHeight: 1.6 }}>
+          <span style={{ fontWeight: 700 }}>THEREFORE</span>, the undersigned waives and releases unto the Owner of said premises any and all liens or claims whatsoever on the above described
+          property and improvements thereon on account of labor, material and/or services provided by the undersigned, subject to the limitations or
+          conditions expressed herein, if any, and further releases claims of any nature against the Owner/Prime Contractor.  The undersigned further
+          certifies that all parties who have provided labor, materials and/or services for said work have been fully paid, or will be fully paid out of the
+          payment contemplated herein, if any, such that no other party has or shall have any claim or right to a lien on account of labor, materials and/or
+          services provided to the undersigned for said project and within the scope of this Affidavit, Release and Waiver of Lien.
+        </div>
+
+        {/* ============ Perjury Oath ============ */}
+        <div style={{ marginBottom: 28, fontWeight: 700, fontSize: '0.85rem', lineHeight: 1.6 }}>
+          I SWEAR OR AFFIRM UNDER THE PENALTIES OF PERJURY THAT THE FOREGOING STATEMENTS ARE TRUE TO THE BEST
+          OF MY KNOWLEDGE.
+        </div>
+
+        {/* ============ Signature Block ============ */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '16px 24px', marginTop: 12 }}>
           <div>
-            <span style={{ fontWeight: 600 }}>Date:</span>{' '}
-            <Field value={formatDate(waiver.date)} minWidth={160} />
+            <BlankLine width={'100%'} value={waiver.signerCompany} />
+            <Caption>Company Name</Caption>
           </div>
           <div>
-            <span style={{ fontWeight: 600 }}>By:</span>{' '}
-            <span
-              style={{
-                borderBottom: '1px solid #000',
-                display: 'inline-block',
-                minWidth: 200,
-                padding: '0 4px 1px',
-                fontStyle: 'italic',
-              }}
-            >
-              {waiver.status === 'Signed' ? waiver.signerName : '\u00A0'}
-            </span>{' '}
-            <Label>Signature</Label>
+            <BlankLine width={'100%'} value={waiver.status === 'Signed' ? waiver.signerName : ''} />
+            <Caption>Representative Signature</Caption>
           </div>
           <div>
-            <span style={{ fontWeight: 600 }}>Print Company Name:</span>{' '}
-            <Field value={waiver.signerCompany} minWidth={180} />
-          </div>
-          <div>
-            <span style={{ fontWeight: 600 }}>Print Name &amp; Title:</span>{' '}
-            <Field value={`${waiver.signerName}, ${waiver.signerTitle}`} minWidth={180} />
+            <BlankLine width={'100%'} value={waiver.signerTitle} />
+            <Caption>Title</Caption>
           </div>
         </div>
 
-        {/* --- Footer --- */}
-        <div
-          style={{
-            marginTop: 40,
-            borderTop: '1px solid #bbb',
-            paddingTop: 10,
-            fontSize: '0.7rem',
-            color: '#888',
-            display: 'flex',
-            justifyContent: 'space-between',
-          }}
-        >
-          <span>GCM_REV_012712</span>
-          <span>&copy; 2012 Granite Commercial Management, LLC. All Rights Reserved</span>
+        {/* --- Date line --- */}
+        <div style={{ marginTop: 20, display: 'flex', justifyContent: 'flex-end' }}>
+          <div>
+            <span style={{ fontWeight: 600, marginRight: 8, fontSize: '0.8rem' }}>Date:</span>
+            <BlankLine width={160} value={waiver.status === 'Signed' ? formatDate(waiver.date) : ''} />
+          </div>
         </div>
       </div>
     </div>

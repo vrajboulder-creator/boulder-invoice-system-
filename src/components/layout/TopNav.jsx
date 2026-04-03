@@ -4,37 +4,152 @@ import { Search, Bell } from "lucide-react";
 function TopNav({ title }) {
   return (
     <header
-      className="sticky top-0 z-30 flex h-16 w-full items-center justify-between border-b border-slate-100 bg-white px-6"
+      style={{
+        position: 'sticky',
+        top: 0,
+        zIndex: 30,
+        display: 'flex',
+        height: '60px',
+        width: '100%',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        borderBottom: '1px solid #e5e7eb',
+        background: '#ffffff',
+        padding: '0 2rem',
+      }}
     >
-      {/* Left — Page title / breadcrumb */}
-      <h1 className="text-lg font-semibold text-slate-800">{title}</h1>
+      {/* Left — Page title */}
+      <h1
+        style={{
+          fontSize: '0.9375rem',
+          fontWeight: 600,
+          color: '#111827',
+          margin: 0,
+          letterSpacing: '-0.01em',
+        }}
+      >
+        {title}
+      </h1>
 
       {/* Right — search, notifications, avatar */}
-      <div className="flex items-center gap-4">
-        {/* Search bar */}
-        <div className="relative">
-          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+        {/* Search */}
+        <div style={{ position: 'relative' }}>
+          <Search
+            size={15}
+            style={{
+              position: 'absolute',
+              left: '0.75rem',
+              top: '50%',
+              transform: 'translateY(-50%)',
+              color: '#9ca3af',
+              pointerEvents: 'none',
+            }}
+          />
           <input
             type="text"
-            placeholder="Search anything..."
-            className="h-9 w-64 rounded-full bg-slate-100 pl-9 pr-4 text-sm text-slate-600 outline-none placeholder:text-slate-400 focus:ring-2 focus:ring-amber-300"
+            placeholder="Search..."
+            style={{
+              height: '36px',
+              width: '220px',
+              borderRadius: '9999px',
+              background: '#f3f4f6',
+              border: '1px solid transparent',
+              paddingLeft: '2.25rem',
+              paddingRight: '1rem',
+              fontSize: '0.8125rem',
+              color: '#374151',
+              outline: 'none',
+              transition: 'border-color 0.15s, box-shadow 0.15s',
+            }}
+            onFocus={(e) => {
+              e.target.style.borderColor = '#f07030';
+              e.target.style.boxShadow = '0 0 0 3px rgba(240,112,48,0.12)';
+              e.target.style.background = '#fff';
+            }}
+            onBlur={(e) => {
+              e.target.style.borderColor = 'transparent';
+              e.target.style.boxShadow = 'none';
+              e.target.style.background = '#f3f4f6';
+            }}
           />
         </div>
 
         {/* Notification bell */}
         <button
           type="button"
-          className="relative rounded-full p-2 text-slate-500 hover:bg-slate-100"
+          style={{
+            position: 'relative',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            width: 36,
+            height: 36,
+            borderRadius: '50%',
+            border: '1px solid #e5e7eb',
+            background: '#fff',
+            color: '#6b7280',
+            cursor: 'pointer',
+            transition: 'background 0.15s',
+          }}
+          onMouseEnter={(e) => (e.currentTarget.style.background = '#f9fafb')}
+          onMouseLeave={(e) => (e.currentTarget.style.background = '#fff')}
         >
-          <Bell className="h-5 w-5" />
-          <span className="absolute -right-0.5 -top-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-red-500 text-[10px] font-bold text-white">
+          <Bell size={16} />
+          <span
+            style={{
+              position: 'absolute',
+              top: '-2px',
+              right: '-2px',
+              width: 16,
+              height: 16,
+              borderRadius: '50%',
+              background: '#f07030',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontSize: '9px',
+              fontWeight: 700,
+              color: '#fff',
+              border: '2px solid #fff',
+            }}
+          >
             3
           </span>
         </button>
 
+        {/* Divider */}
+        <div style={{ width: 1, height: 24, background: '#e5e7eb' }} />
+
         {/* User avatar */}
-        <div className="flex h-9 w-9 items-center justify-center rounded-full bg-amber-400 text-sm font-semibold text-white select-none">
-          MT
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '0.5rem',
+            cursor: 'pointer',
+          }}
+        >
+          <div
+            style={{
+              width: 32,
+              height: 32,
+              borderRadius: '50%',
+              background: '#f07030',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontSize: '0.7rem',
+              fontWeight: 700,
+              color: '#fff',
+              userSelect: 'none',
+            }}
+          >
+            MT
+          </div>
+          <span style={{ fontSize: '0.8125rem', fontWeight: 500, color: '#374151' }}>
+            Mike T.
+          </span>
         </div>
       </div>
     </header>

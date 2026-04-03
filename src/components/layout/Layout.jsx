@@ -50,9 +50,9 @@ function Layout() {
   return (
     <div className="flex min-h-screen">
       <Sidebar />
-      <div className="ml-[260px] flex-1 flex flex-col">
+      <div className="ml-[240px] flex-1 flex flex-col min-h-screen">
         <TopNav title={title} />
-        <main className="p-6 bg-slate-50 flex-1">
+        <main style={{ flex: 1, background: '#f5f5f5', padding: '1.75rem 2rem' }}>
           <Outlet />
         </main>
       </div>

@@ -33,6 +33,8 @@ import {
 import {
   projects,
   invoices,
+  payApplications,
+  lienWaivers,
   revenueData,
   projectStatusData,
   recentActivity,
@@ -58,6 +60,16 @@ const formattedDate = today.toLocaleDateString('en-US', {
 // Stat calculations
 const activeProjects = projects.filter((p) => p.status === 'In Progress').length;
 const pendingInvoices = invoices.filter((i) => i.status === 'Pending').length;
+
+// Cross-module outstanding: unpaid invoices + unapproved pay apps + unsigned lien waivers
+const outstandingInvoiceAmt = invoices
+  .filter((i) => i.status === 'Pending' || i.status === 'Overdue')
+  .reduce((s, i) => s + (i.amount || i.currentPaymentDue || 0), 0);
+const outstandingPayAppAmt = payApplications
+  .filter((pa) => pa.status === 'Submitted' || pa.status === 'Approved')
+  .reduce((s, pa) => s + (pa.currentPaymentDue || 0), 0);
+const unsignedWaivers = lienWaivers.filter((w) => w.status !== 'Signed').length;
+const totalCrossModuleOutstanding = outstandingInvoiceAmt + outstandingPayAppAmt;
 
 const marchRevenue = invoices
   .filter((i) => {
@@ -154,42 +166,37 @@ export default function Dashboard() {
   const firstName = currentUser.name.split(' ')[0];
 
   return (
-    <div style={{ padding: '2rem' }}>
+    <div style={{ padding: '0' }}>
       {/* Welcome header */}
       <div
         style={{
           display: 'flex',
           justifyContent: 'space-between',
-          alignItems: 'flex-start',
-          marginBottom: '2rem',
+          alignItems: 'center',
+          marginBottom: '1.75rem',
+          paddingBottom: '1.25rem',
+          borderBottom: '1px solid #e5e7eb',
         }}
       >
         <div>
-          <h1
-            style={{
-              fontSize: '1.75rem',
-              fontWeight: 700,
-              color: '#0f172a',
-              margin: 0,
-            }}
-          >
-            Welcome back, {firstName}
+          <h1 style={{ fontSize: '1.375rem', fontWeight: 700, color: '#111827', margin: 0, letterSpacing: '-0.02em' }}>
+            Welcome back, {firstName} 👋
           </h1>
-          <p style={{ color: '#64748b', margin: '0.25rem 0 0', fontSize: '0.875rem' }}>
+          <p style={{ color: '#9ca3af', margin: '0.2rem 0 0', fontSize: '0.8125rem' }}>
             {formattedDate}
           </p>
         </div>
-        <div style={{ display: 'flex', gap: '0.75rem' }}>
+        <div style={{ display: 'flex', gap: '0.625rem' }}>
           <Link to="/projects/create" className="btn-primary" style={{ textDecoration: 'none' }}>
-            <Plus size={16} />
+            <Plus size={15} />
             New Project
           </Link>
-          <Link to="/invoices/create" className="btn-primary" style={{ textDecoration: 'none' }}>
-            <FileText size={16} />
+          <Link to="/invoices/create" className="btn-secondary" style={{ textDecoration: 'none' }}>
+            <FileText size={15} />
             New Invoice
           </Link>
-          <Link to="/clients/create" className="btn-primary" style={{ textDecoration: 'none' }}>
-            <UserPlus size={16} />
+          <Link to="/clients/create" className="btn-secondary" style={{ textDecoration: 'none' }}>
+            <UserPlus size={15} />
             New Client
           </Link>
         </div>
@@ -199,7 +206,7 @@ export default function Dashboard() {
       <div
         style={{
           display: 'grid',
-          gridTemplateColumns: 'repeat(4, 1fr)',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))',
           gap: '1.5rem',
           marginBottom: '2rem',
         }}
@@ -207,24 +214,15 @@ export default function Dashboard() {
         <div className="stat-card">
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
             <div>
-              <p style={{ fontSize: '0.8125rem', color: '#64748b', margin: 0, fontWeight: 500 }}>
-                Total Active Projects
+              <p style={{ fontSize: '0.75rem', color: '#9ca3af', margin: 0, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                Active Projects
               </p>
-              <p style={{ fontSize: '2rem', fontWeight: 700, color: '#0f172a', margin: '0.5rem 0 0' }}>
+              <p style={{ fontSize: '1.875rem', fontWeight: 700, color: '#111827', margin: '0.375rem 0 0', letterSpacing: '-0.02em' }}>
                 {activeProjects}
               </p>
             </div>
-            <div
-              style={{
-                background: '#eff6ff',
-                borderRadius: '0.625rem',
-                padding: '0.625rem',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-              }}
-            >
-              <FolderKanban size={22} color="#3b82f6" />
+            <div style={{ background: '#fff7ed', borderRadius: '0.625rem', padding: '0.625rem', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <FolderKanban size={20} color="#f97316" />
             </div>
           </div>
         </div>
@@ -232,24 +230,15 @@ export default function Dashboard() {
         <div className="stat-card">
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
             <div>
-              <p style={{ fontSize: '0.8125rem', color: '#64748b', margin: 0, fontWeight: 500 }}>
+              <p style={{ fontSize: '0.75rem', color: '#9ca3af', margin: 0, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
                 Pending Invoices
               </p>
-              <p style={{ fontSize: '2rem', fontWeight: 700, color: '#0f172a', margin: '0.5rem 0 0' }}>
+              <p style={{ fontSize: '1.875rem', fontWeight: 700, color: '#111827', margin: '0.375rem 0 0', letterSpacing: '-0.02em' }}>
                 {pendingInvoices}
               </p>
             </div>
-            <div
-              style={{
-                background: '#fffbeb',
-                borderRadius: '0.625rem',
-                padding: '0.625rem',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-              }}
-            >
-              <Receipt size={22} color="#f59e0b" />
+            <div style={{ background: '#fff7ed', borderRadius: '0.625rem', padding: '0.625rem', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <Receipt size={20} color="#f97316" />
             </div>
           </div>
         </div>
@@ -257,24 +246,15 @@ export default function Dashboard() {
         <div className="stat-card">
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
             <div>
-              <p style={{ fontSize: '0.8125rem', color: '#64748b', margin: 0, fontWeight: 500 }}>
+              <p style={{ fontSize: '0.75rem', color: '#9ca3af', margin: 0, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
                 Revenue This Month
               </p>
-              <p style={{ fontSize: '2rem', fontWeight: 700, color: '#0f172a', margin: '0.5rem 0 0' }}>
+              <p style={{ fontSize: '1.875rem', fontWeight: 700, color: '#111827', margin: '0.375rem 0 0', letterSpacing: '-0.02em' }}>
                 {formatCurrency(marchRevenue)}
               </p>
             </div>
-            <div
-              style={{
-                background: '#ecfdf5',
-                borderRadius: '0.625rem',
-                padding: '0.625rem',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-              }}
-            >
-              <DollarSign size={22} color="#10b981" />
+            <div style={{ background: '#ecfdf5', borderRadius: '0.625rem', padding: '0.625rem', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <DollarSign size={20} color="#059669" />
             </div>
           </div>
         </div>
@@ -282,27 +262,40 @@ export default function Dashboard() {
         <div className="stat-card">
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
             <div>
-              <p style={{ fontSize: '0.8125rem', color: '#64748b', margin: 0, fontWeight: 500 }}>
+              <p style={{ fontSize: '0.75rem', color: '#9ca3af', margin: 0, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
                 Upcoming Deadlines
               </p>
-              <p style={{ fontSize: '2rem', fontWeight: 700, color: '#0f172a', margin: '0.5rem 0 0' }}>
+              <p style={{ fontSize: '1.875rem', fontWeight: 700, color: '#111827', margin: '0.375rem 0 0', letterSpacing: '-0.02em' }}>
                 {upcomingDeadlines}
               </p>
             </div>
-            <div
-              style={{
-                background: '#fef2f2',
-                borderRadius: '0.625rem',
-                padding: '0.625rem',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-              }}
-            >
-              <AlertCircle size={22} color="#ef4444" />
+            <div style={{ background: '#fef2f2', borderRadius: '0.625rem', padding: '0.625rem', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <AlertCircle size={20} color="#ef4444" />
             </div>
           </div>
         </div>
+
+        {/* Outstanding Cross-Module */}
+        <Link to="/invoices" style={{ textDecoration: 'none' }}>
+          <div className="stat-card" style={{ cursor: 'pointer', borderLeft: '3px solid #f97316' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+              <div>
+                <p style={{ fontSize: '0.75rem', color: '#9ca3af', margin: 0, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                  Total Outstanding
+                </p>
+                <p style={{ fontSize: '1.875rem', fontWeight: 700, color: '#dc2626', margin: '0.375rem 0 0', letterSpacing: '-0.02em' }}>
+                  {formatCurrency(totalCrossModuleOutstanding)}
+                </p>
+                <p style={{ fontSize: '0.7rem', color: '#9ca3af', margin: '0.25rem 0 0' }}>
+                  {unsignedWaivers} waiver{unsignedWaivers !== 1 ? 's' : ''} unsigned
+                </p>
+              </div>
+              <div style={{ background: '#fef2f2', borderRadius: '0.625rem', padding: '0.625rem', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <DollarSign size={20} color="#dc2626" />
+              </div>
+            </div>
+          </div>
+        </Link>
       </div>
 
       {/* Charts + Activity */}

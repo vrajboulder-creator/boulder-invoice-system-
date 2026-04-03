@@ -1,14 +1,9 @@
 import { useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ArrowLeft, Save, FileCheck, Eye } from 'lucide-react';
-import { projects, clients, payApplications } from '../data/mockData';
-
-const waiverTypes = [
-  { value: 'K2', label: 'K2 - Conditional Progress Payment' },
-  { value: 'K4', label: 'K4 - Unconditional Progress Payment' },
-  { value: 'K1', label: 'K1 - Conditional Final Payment' },
-  { value: 'K3', label: 'K3 - Unconditional Final Payment' },
-];
+import { lienWaiverService, projectService, payAppService } from '../services/supabaseService';
+import { useSupabase } from '../hooks/useSupabase';
+import { projects as mockProjects, clients as mockClients, payApplications as mockPayApps } from '../data/mockData';
 
 const formatCurrency = (amount) =>
   new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2 }).format(amount);
@@ -16,57 +11,141 @@ const formatCurrency = (amount) =>
 export default function LienWaiverCreate() {
   const navigate = useNavigate();
 
-  const [waiverType, setWaiverType] = useState('');
+  // Fetch projects and pay apps from Supabase with mock fallback
+  const { data: rawProjects } = useSupabase(projectService.list, mockProjects);
+  const { data: rawPayApps } = useSupabase(payAppService.list, mockPayApps);
+
+  // Normalize projects
+  const projectsList = useMemo(() => rawProjects.map((p) => ({
+    id: p.id,
+    name: p.name || p.project_name || '',
+    client: p.client || p.client_name || '',
+    clientId: p.clientId || p.client_id || '',
+    description: p.description || '',
+  })), [rawProjects]);
+
+  // Normalize pay apps
+  const payAppsList = useMemo(() => rawPayApps.map((pa) => ({
+    id: pa.id,
+    applicationNo: pa.applicationNo ?? pa.application_no ?? '',
+    projectId: pa.projectId || pa.project_id || '',
+    projectName: pa.projectName || pa.project_name || '',
+    ownerName: pa.owner || pa.owner_name || '',
+    ownerAddress: pa.ownerAddress || pa.owner_address || '',
+    contractorName: pa.contractor || pa.contractor_name || '',
+    currentPaymentDue: pa.currentPaymentDue ?? pa.current_payment_due ?? 0,
+    balanceToFinish: pa.balanceToFinish ?? pa.balance_to_finish ?? 0,
+  })), [rawPayApps]);
+
+  const [waiverCategory, setWaiverCategory] = useState('Partial');
+  const [conditionType, setConditionType] = useState('Conditional');
   const [projectId, setProjectId] = useState('');
-  const [owner, setOwner] = useState('');
-  const [ownerAddress, setOwnerAddress] = useState('');
-  const [propertyLocation, setPropertyLocation] = useState('');
-  const [companyName, setCompanyName] = useState('');
   const [signerName, setSignerName] = useState('');
+  const [furnisher, setFurnisher] = useState('');
+  const [ownerContractor, setOwnerContractor] = useState('');
+  const [jobNameAddress, setJobNameAddress] = useState('');
+  const [waiverAmount, setWaiverAmount] = useState('');
+  const [finalBalance, setFinalBalance] = useState('');
+  const [paymentCondition, setPaymentCondition] = useState('');
+  const [companyName, setCompanyName] = useState('');
   const [signerTitle, setSignerTitle] = useState('');
-  const [makerOfCheck, setMakerOfCheck] = useState('Boulder Construction');
-  const [checkAmount, setCheckAmount] = useState('');
-  const [payableTo, setPayableTo] = useState('');
-  const [jobDescription, setJobDescription] = useState('');
   const [relatedPayApp, setRelatedPayApp] = useState('');
+  const [saving, setSaving] = useState(false);
 
   // Auto-fill when project changes
   const handleProjectChange = (id) => {
     setProjectId(id);
     if (id) {
-      const proj = projects.find((p) => p.id === id);
+      const proj = projectsList.find((p) => p.id === id);
       if (proj) {
-        setOwner(proj.client);
-        const client = clients.find((c) => c.id === proj.clientId);
+        setOwnerContractor(proj.client);
+        const client = mockClients.find((c) => c.id === proj.clientId);
         const addr = client ? client.address : '';
-        setOwnerAddress(addr);
-        setPropertyLocation(addr);
-        setJobDescription(proj.description || '');
+        setJobNameAddress(addr);
       }
     } else {
-      setOwner('');
-      setOwnerAddress('');
-      setPropertyLocation('');
-      setJobDescription('');
+      setOwnerContractor('');
+      setJobNameAddress('');
     }
   };
 
   const projectPayApps = useMemo(
-    () => (projectId ? payApplications.filter((pa) => pa.projectId === projectId) : payApplications),
-    [projectId],
+    () => (projectId ? payAppsList.filter((pa) => pa.projectId === projectId) : payAppsList),
+    [projectId, payAppsList],
   );
 
-  const selectedWaiverLabel = waiverTypes.find((w) => w.value === waiverType)?.label || '';
-  const selectedProjectName = projects.find((p) => p.id === projectId)?.name || '';
-
-  const handleGenerate = () => {
-    alert('Lien waiver generated successfully (UI only).');
-    navigate('/lien-waivers');
+  // Auto-fill amounts and category from selected pay app
+  const handlePayAppChange = (payAppId) => {
+    setRelatedPayApp(payAppId);
+    if (!payAppId) return;
+    const pa = payAppsList.find((p) => p.id === payAppId);
+    if (!pa) return;
+    const balance = parseFloat(pa.balanceToFinish) || 0;
+    const paymentDue = parseFloat(pa.currentPaymentDue) || 0;
+    // Final waiver if nothing left to pay after this
+    if (balance <= 0) {
+      setWaiverCategory('Final');
+      setFinalBalance(String(paymentDue));
+    } else {
+      setWaiverCategory('Partial');
+      setWaiverAmount(String(paymentDue));
+    }
+    // Auto-fill owner/furnisher if not already set
+    if (!ownerContractor && pa.ownerName) setOwnerContractor(pa.ownerName);
+    if (!jobNameAddress && pa.ownerAddress) setJobNameAddress(pa.ownerAddress);
+    if (!furnisher && pa.contractorName) setFurnisher(pa.contractorName);
+    // Auto-set project if not already selected
+    if (!projectId && pa.projectId) {
+      setProjectId(pa.projectId);
+    }
   };
 
-  const handleSaveDraft = () => {
-    alert('Lien waiver saved as draft (UI only).');
-    navigate('/lien-waivers');
+  const selectedProjectName = projectsList.find((p) => p.id === projectId)?.name || '';
+
+  /** Build the waiver row object for Supabase */
+  const buildWaiverRow = (status) => ({
+    waiver_category: waiverCategory,
+    condition_type: conditionType,
+    project_id: projectId || null,
+    project_name: selectedProjectName,
+    pay_application_id: relatedPayApp || null,
+    signer_name: signerName,
+    furnisher,
+    owner_contractor: ownerContractor,
+    job_name_address: jobNameAddress,
+    waiver_amount: waiverAmount ? parseFloat(waiverAmount) : 0,
+    final_balance: finalBalance ? parseFloat(finalBalance) : 0,
+    payment_condition: paymentCondition,
+    signer_company: companyName,
+    signer_title: signerTitle,
+    waiver_date: new Date().toISOString().split('T')[0],
+    status,
+  });
+
+  const handleGenerate = async () => {
+    setSaving(true);
+    try {
+      await lienWaiverService.create(buildWaiverRow('Pending Signature'));
+      navigate('/lien-waivers');
+    } catch (err) {
+      console.error('Failed to generate waiver:', err);
+      alert('Failed to generate waiver. ' + (err.message || ''));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleSaveDraft = async () => {
+    setSaving(true);
+    try {
+      await lienWaiverService.create(buildWaiverRow('Draft'));
+      navigate('/lien-waivers');
+    } catch (err) {
+      console.error('Failed to save draft:', err);
+      alert('Failed to save draft. ' + (err.message || ''));
+    } finally {
+      setSaving(false);
+    }
   };
 
   const labelStyle = {
@@ -79,6 +158,10 @@ export default function LienWaiverCreate() {
       {text}
     </h3>
   );
+
+  const displayAmount = waiverCategory === 'Final'
+    ? (finalBalance ? formatCurrency(parseFloat(finalBalance)) : '$0.00')
+    : (waiverAmount ? formatCurrency(parseFloat(waiverAmount)) : '$0.00');
 
   return (
     <div style={{ padding: '1.5rem' }}>
@@ -100,15 +183,34 @@ export default function LienWaiverCreate() {
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem', alignItems: 'start' }}>
         {/* Form Card */}
         <div className="card" style={{ padding: '2rem' }}>
-          {/* Waiver Type */}
+          {/* Waiver Category: Partial / Final */}
           <div style={{ marginBottom: '1.5rem' }}>
             <label style={labelStyle}>Waiver Type</label>
-            <select className="input" value={waiverType} onChange={(e) => setWaiverType(e.target.value)}>
-              <option value="">Select waiver type</option>
-              {waiverTypes.map((w) => (
-                <option key={w.value} value={w.value}>{w.label}</option>
-              ))}
-            </select>
+            <div style={{ display: 'flex', gap: '1rem' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer', fontSize: '0.875rem' }}>
+                <input type="radio" name="waiverCategory" value="Partial" checked={waiverCategory === 'Partial'} onChange={(e) => setWaiverCategory(e.target.value)} />
+                Partial Waiver
+              </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer', fontSize: '0.875rem' }}>
+                <input type="radio" name="waiverCategory" value="Final" checked={waiverCategory === 'Final'} onChange={(e) => setWaiverCategory(e.target.value)} />
+                Final Waiver
+              </label>
+            </div>
+          </div>
+
+          {/* Condition Type: Conditional / Unconditional */}
+          <div style={{ marginBottom: '1.5rem' }}>
+            <label style={labelStyle}>Condition Type</label>
+            <div style={{ display: 'flex', gap: '1rem' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer', fontSize: '0.875rem' }}>
+                <input type="radio" name="conditionType" value="Unconditional" checked={conditionType === 'Unconditional'} onChange={(e) => setConditionType(e.target.value)} />
+                Unconditional
+              </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer', fontSize: '0.875rem' }}>
+                <input type="radio" name="conditionType" value="Conditional" checked={conditionType === 'Conditional'} onChange={(e) => setConditionType(e.target.value)} />
+                Conditional
+              </label>
+            </div>
           </div>
 
           {/* Project */}
@@ -116,41 +218,75 @@ export default function LienWaiverCreate() {
             <label style={labelStyle}>Project</label>
             <select className="input" value={projectId} onChange={(e) => handleProjectChange(e.target.value)}>
               <option value="">Select a project</option>
-              {projects.map((p) => (
+              {projectsList.map((p) => (
                 <option key={p.id} value={p.id}>{p.name}</option>
               ))}
             </select>
           </div>
 
-          {/* Owner */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1.5rem' }}>
-            <div>
-              <label style={labelStyle}>Owner</label>
-              <input className="input" type="text" value={owner} onChange={(e) => setOwner(e.target.value)} placeholder="Property owner name" />
-            </div>
-            <div>
-              <label style={labelStyle}>Owner Address</label>
-              <input className="input" type="text" value={ownerAddress} onChange={(e) => setOwnerAddress(e.target.value)} placeholder="Owner address" />
-            </div>
-          </div>
-
-          {/* Property Location */}
-          <div style={{ marginBottom: '1.5rem' }}>
-            <label style={labelStyle}>Property Location</label>
-            <input className="input" type="text" value={propertyLocation} onChange={(e) => setPropertyLocation(e.target.value)} placeholder="Property / job site address" />
-          </div>
-
-          {/* Signer Information */}
+          {/* Sworn Statement Fields */}
           <div style={{ borderTop: '1px solid #e2e8f0', paddingTop: '1.25rem', marginBottom: '1.5rem' }}>
-            {sectionTitle('Signer Information')}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '1rem' }}>
+            {sectionTitle('Sworn Statement Details')}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1rem' }}>
+              <div>
+                <label style={labelStyle}>Name (Signer)</label>
+                <input className="input" type="text" value={signerName} onChange={(e) => setSignerName(e.target.value)} placeholder="Person making the affidavit" />
+              </div>
+              <div>
+                <label style={labelStyle}>Furnisher</label>
+                <input className="input" type="text" value={furnisher} onChange={(e) => setFurnisher(e.target.value)} placeholder="Furnisher / subcontractor name" />
+              </div>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1rem' }}>
+              <div>
+                <label style={labelStyle}>Owner or Prime Contractor</label>
+                <input className="input" type="text" value={ownerContractor} onChange={(e) => setOwnerContractor(e.target.value)} placeholder="Owner / prime contractor name" />
+              </div>
+              <div>
+                <label style={labelStyle}>Job Name & Address</label>
+                <input className="input" type="text" value={jobNameAddress} onChange={(e) => setJobNameAddress(e.target.value)} placeholder="Job site name and address" />
+              </div>
+            </div>
+          </div>
+
+          {/* Amount */}
+          <div style={{ borderTop: '1px solid #e2e8f0', paddingTop: '1.25rem', marginBottom: '1.5rem' }}>
+            {sectionTitle('Payment Details')}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1rem' }}>
+              {waiverCategory === 'Partial' ? (
+                <div>
+                  <label style={labelStyle}>Partial Waiver Amount ($)</label>
+                  <input className="input" type="number" min="0" step="0.01" value={waiverAmount} onChange={(e) => setWaiverAmount(e.target.value)} placeholder="0.00" />
+                </div>
+              ) : (
+                <div>
+                  <label style={labelStyle}>Final Balance Due ($)</label>
+                  <input className="input" type="number" min="0" step="0.01" value={finalBalance} onChange={(e) => setFinalBalance(e.target.value)} placeholder="0.00" />
+                </div>
+              )}
+            </div>
+            {conditionType === 'Conditional' && (
+              <div>
+                <label style={labelStyle}>Payment Condition (optional)</label>
+                <textarea
+                  className="input"
+                  rows={2}
+                  value={paymentCondition}
+                  onChange={(e) => setPaymentCondition(e.target.value)}
+                  placeholder="Describe any conditions for this payment..."
+                  style={{ resize: 'vertical' }}
+                />
+              </div>
+            )}
+          </div>
+
+          {/* Signer / Signature Block */}
+          <div style={{ borderTop: '1px solid #e2e8f0', paddingTop: '1.25rem', marginBottom: '1.5rem' }}>
+            {sectionTitle('Signature Information')}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
               <div>
                 <label style={labelStyle}>Company Name</label>
                 <input className="input" type="text" value={companyName} onChange={(e) => setCompanyName(e.target.value)} placeholder="Company name" />
-              </div>
-              <div>
-                <label style={labelStyle}>Signer Name</label>
-                <input className="input" type="text" value={signerName} onChange={(e) => setSignerName(e.target.value)} placeholder="Full name" />
               </div>
               <div>
                 <label style={labelStyle}>Title</label>
@@ -159,42 +295,10 @@ export default function LienWaiverCreate() {
             </div>
           </div>
 
-          {/* Payment Information */}
-          <div style={{ borderTop: '1px solid #e2e8f0', paddingTop: '1.25rem', marginBottom: '1.5rem' }}>
-            {sectionTitle('Payment Information')}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '1rem' }}>
-              <div>
-                <label style={labelStyle}>Maker of Check</label>
-                <input className="input" type="text" value={makerOfCheck} onChange={(e) => setMakerOfCheck(e.target.value)} />
-              </div>
-              <div>
-                <label style={labelStyle}>Check Amount ($)</label>
-                <input className="input" type="number" min="0" step="0.01" value={checkAmount} onChange={(e) => setCheckAmount(e.target.value)} placeholder="0.00" />
-              </div>
-              <div>
-                <label style={labelStyle}>Payable To</label>
-                <input className="input" type="text" value={payableTo} onChange={(e) => setPayableTo(e.target.value)} placeholder="Payee name" />
-              </div>
-            </div>
-          </div>
-
-          {/* Job Description */}
-          <div style={{ marginBottom: '1.5rem' }}>
-            <label style={labelStyle}>Job Description</label>
-            <textarea
-              className="input"
-              rows={3}
-              value={jobDescription}
-              onChange={(e) => setJobDescription(e.target.value)}
-              placeholder="Describe the work performed..."
-              style={{ resize: 'vertical' }}
-            />
-          </div>
-
           {/* Related Pay Application */}
           <div style={{ marginBottom: '2rem' }}>
-            <label style={labelStyle}>Related Pay Application</label>
-            <select className="input" value={relatedPayApp} onChange={(e) => setRelatedPayApp(e.target.value)}>
+            <label style={labelStyle}>Related Pay Application <span style={{ color: '#64748b', fontWeight: 400, textTransform: 'none', letterSpacing: 0 }}>(auto-fills amounts)</span></label>
+            <select className="input" value={relatedPayApp} onChange={(e) => handlePayAppChange(e.target.value)}>
               <option value="">None</option>
               {projectPayApps.map((pa) => (
                 <option key={pa.id} value={pa.id}>
@@ -206,12 +310,12 @@ export default function LienWaiverCreate() {
 
           {/* Buttons */}
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem', borderTop: '1px solid #e2e8f0', paddingTop: '1.5rem' }}>
-            <button className="btn-secondary" onClick={() => navigate('/lien-waivers')}>Cancel</button>
-            <button className="btn-secondary" onClick={handleSaveDraft}>
-              <Save size={16} /> Save as Draft
+            <button className="btn-secondary" onClick={() => navigate('/lien-waivers')} disabled={saving}>Cancel</button>
+            <button className="btn-secondary" onClick={handleSaveDraft} disabled={saving}>
+              <Save size={16} /> {saving ? 'Saving...' : 'Save as Draft'}
             </button>
-            <button className="btn-primary" onClick={handleGenerate}>
-              <FileCheck size={16} /> Generate Waiver
+            <button className="btn-primary" onClick={handleGenerate} disabled={saving}>
+              <FileCheck size={16} /> {saving ? 'Generating...' : 'Generate Waiver'}
             </button>
           </div>
         </div>
@@ -223,12 +327,12 @@ export default function LienWaiverCreate() {
             <span style={{ fontSize: '0.75rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Live Preview</span>
           </div>
 
-          <div style={{ border: '1px solid #e2e8f0', borderRadius: '0.5rem', padding: '1.25rem', background: '#fafbfc', fontSize: '0.8rem', lineHeight: 1.7, color: '#334155' }}>
-            <h4 style={{ textAlign: 'center', fontSize: '0.9rem', fontWeight: 700, color: '#0f172a', marginBottom: '0.25rem' }}>
-              LIEN WAIVER
+          <div style={{ border: '1px solid #e2e8f0', borderRadius: '0.5rem', padding: '1.25rem', background: '#fafbfc', fontSize: '0.78rem', lineHeight: 1.65, color: '#334155' }}>
+            <h4 style={{ textAlign: 'center', fontSize: '0.85rem', fontWeight: 700, color: '#0f172a', marginBottom: '0.25rem' }}>
+              AFFIDAVIT, RELEASE AND WAIVER OF LIEN
             </h4>
-            <p style={{ textAlign: 'center', fontSize: '0.75rem', color: '#64748b', marginBottom: '1rem' }}>
-              {selectedWaiverLabel || 'Select a waiver type'}
+            <p style={{ textAlign: 'center', fontSize: '0.72rem', color: '#64748b', marginBottom: '1rem' }}>
+              {waiverCategory} &middot; {conditionType}
             </p>
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem 1rem', marginBottom: '1rem' }}>
@@ -237,16 +341,16 @@ export default function LienWaiverCreate() {
                 <p style={{ margin: 0 }}>{selectedProjectName || '---'}</p>
               </div>
               <div>
-                <span style={{ fontWeight: 600, fontSize: '0.7rem', color: '#94a3b8', textTransform: 'uppercase' }}>Owner</span>
-                <p style={{ margin: 0 }}>{owner || '---'}</p>
+                <span style={{ fontWeight: 600, fontSize: '0.7rem', color: '#94a3b8', textTransform: 'uppercase' }}>Owner / Contractor</span>
+                <p style={{ margin: 0 }}>{ownerContractor || '---'}</p>
               </div>
               <div>
-                <span style={{ fontWeight: 600, fontSize: '0.7rem', color: '#94a3b8', textTransform: 'uppercase' }}>Property Location</span>
-                <p style={{ margin: 0 }}>{propertyLocation || '---'}</p>
+                <span style={{ fontWeight: 600, fontSize: '0.7rem', color: '#94a3b8', textTransform: 'uppercase' }}>Furnisher</span>
+                <p style={{ margin: 0 }}>{furnisher || '---'}</p>
               </div>
               <div>
-                <span style={{ fontWeight: 600, fontSize: '0.7rem', color: '#94a3b8', textTransform: 'uppercase' }}>Company</span>
-                <p style={{ margin: 0 }}>{companyName || '---'}</p>
+                <span style={{ fontWeight: 600, fontSize: '0.7rem', color: '#94a3b8', textTransform: 'uppercase' }}>Job Name & Address</span>
+                <p style={{ margin: 0 }}>{jobNameAddress || '---'}</p>
               </div>
             </div>
 
@@ -258,45 +362,39 @@ export default function LienWaiverCreate() {
             </div>
 
             <div style={{ borderTop: '1px solid #e2e8f0', paddingTop: '0.75rem', marginBottom: '0.75rem' }}>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '0.5rem' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' }}>
                 <div>
-                  <span style={{ fontWeight: 600, fontSize: '0.7rem', color: '#94a3b8', textTransform: 'uppercase' }}>Maker of Check</span>
-                  <p style={{ margin: 0 }}>{makerOfCheck || '---'}</p>
+                  <span style={{ fontWeight: 600, fontSize: '0.7rem', color: '#94a3b8', textTransform: 'uppercase' }}>Company</span>
+                  <p style={{ margin: 0 }}>{companyName || '---'}</p>
                 </div>
                 <div>
                   <span style={{ fontWeight: 600, fontSize: '0.7rem', color: '#94a3b8', textTransform: 'uppercase' }}>Amount</span>
                   <p style={{ margin: 0, fontWeight: 600, color: '#0f172a' }}>
-                    {checkAmount ? formatCurrency(parseFloat(checkAmount)) : '---'}
+                    {displayAmount}
                   </p>
-                </div>
-                <div>
-                  <span style={{ fontWeight: 600, fontSize: '0.7rem', color: '#94a3b8', textTransform: 'uppercase' }}>Payable To</span>
-                  <p style={{ margin: 0 }}>{payableTo || '---'}</p>
                 </div>
               </div>
             </div>
 
-            {jobDescription && (
+            {paymentCondition && (
               <div style={{ borderTop: '1px solid #e2e8f0', paddingTop: '0.75rem' }}>
-                <span style={{ fontWeight: 600, fontSize: '0.7rem', color: '#94a3b8', textTransform: 'uppercase' }}>Job Description</span>
-                <p style={{ margin: 0 }}>{jobDescription}</p>
+                <span style={{ fontWeight: 600, fontSize: '0.7rem', color: '#94a3b8', textTransform: 'uppercase' }}>Payment Condition</span>
+                <p style={{ margin: 0 }}>{paymentCondition}</p>
               </div>
             )}
 
-            {relatedPayApp && (
-              <div style={{ borderTop: '1px solid #e2e8f0', paddingTop: '0.75rem', marginTop: '0.75rem' }}>
-                <span style={{ fontWeight: 600, fontSize: '0.7rem', color: '#94a3b8', textTransform: 'uppercase' }}>Related Pay Application</span>
-                <p style={{ margin: 0 }}>{relatedPayApp}</p>
+            <div style={{ borderTop: '1px solid #cbd5e1', marginTop: '1.25rem', paddingTop: '1rem' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '0.5rem', textAlign: 'center' }}>
+                <div>
+                  <p style={{ fontSize: '0.7rem', color: '#94a3b8', margin: 0, borderTop: '1px solid #ccc', paddingTop: 4 }}>Company Name</p>
+                </div>
+                <div>
+                  <p style={{ fontSize: '0.7rem', color: '#94a3b8', margin: 0, borderTop: '1px solid #ccc', paddingTop: 4 }}>Representative Signature</p>
+                </div>
+                <div>
+                  <p style={{ fontSize: '0.7rem', color: '#94a3b8', margin: 0, borderTop: '1px solid #ccc', paddingTop: 4 }}>Title</p>
+                </div>
               </div>
-            )}
-
-            <div style={{ borderTop: '1px solid #cbd5e1', marginTop: '1.25rem', paddingTop: '1rem', textAlign: 'center' }}>
-              <p style={{ fontSize: '0.7rem', color: '#94a3b8', margin: 0 }}>
-                Signature: _______________________________
-              </p>
-              <p style={{ fontSize: '0.7rem', color: '#94a3b8', margin: '0.25rem 0 0 0' }}>
-                Date: _______________________________
-              </p>
             </div>
           </div>
         </div>

@@ -1,32 +1,63 @@
 -- ============================================================
 -- Boulder Construction CRM — Supabase Database Schema
 -- Run this in the Supabase SQL Editor to create all tables
+--
+-- NOTE: Uses TEXT primary keys (not UUID) to support app-generated
+-- IDs like CLI-001, INV-011, PRJ-001, etc.
 -- ============================================================
 
+-- Drop existing tables if re-running (order matters for foreign keys)
+drop table if exists public.pay_app_draw_history cascade;
+drop table if exists public.pay_application_line_items cascade;
+drop table if exists public.pay_applications cascade;
+drop table if exists public.lien_waivers cascade;
+drop table if exists public.change_order_versions cascade;
+drop table if exists public.change_orders cascade;
+drop table if exists public.rfis cascade;
+drop table if exists public.invoice_line_items cascade;
+drop table if exists public.invoices cascade;
+drop table if exists public.estimate_line_items cascade;
+drop table if exists public.estimates cascade;
+drop table if exists public.documents cascade;
+drop table if exists public.timesheet_entries cascade;
+drop table if exists public.daily_logs cascade;
+drop table if exists public.tasks cascade;
+drop table if exists public.project_members cascade;
+drop table if exists public.schedule_events cascade;
+drop table if exists public.job_costs cascade;
+drop table if exists public.material_catalog cascade;
+drop table if exists public.communication_log cascade;
+drop table if exists public.notifications cascade;
+drop table if exists public.subcontractors cascade;
+drop table if exists public.projects cascade;
+drop table if exists public.clients cascade;
+drop table if exists public.users cascade;
+
+
 -- ── 1. USERS / AUTH ─────────────────────────────────────────
-create table if not exists public.users (
-  id uuid primary key default gen_random_uuid(),
+create table public.users (
+  id text primary key,
   email text unique not null,
   name text not null,
-  role text not null default 'User' check (role in ('Admin', 'Project Manager', 'Foreman', 'Office Manager', 'Safety Officer', 'User')),
+  role text not null default 'User',
   phone text,
   initials text,
   avatar_url text,
-  status text not null default 'Active' check (status in ('Active', 'Inactive')),
+  status text not null default 'Active',
   hire_date date,
   created_at timestamptz default now(),
   updated_at timestamptz default now()
 );
 
 -- ── 2. CLIENTS ──────────────────────────────────────────────
-create table if not exists public.clients (
-  id uuid primary key default gen_random_uuid(),
+create table public.clients (
+  id text primary key,
   name text not null,
   company text,
   phone text,
   email text,
   address text,
-  status text not null default 'Active' check (status in ('Active', 'Inactive', 'Lead')),
+  status text not null default 'Active',
   last_contact date,
   notes text,
   created_at timestamptz default now(),
@@ -34,12 +65,12 @@ create table if not exists public.clients (
 );
 
 -- ── 3. PROJECTS ─────────────────────────────────────────────
-create table if not exists public.projects (
-  id uuid primary key default gen_random_uuid(),
+create table public.projects (
+  id text primary key,
   name text not null,
-  client_id uuid references public.clients(id) on delete set null,
-  status text not null default 'Planning' check (status in ('Planning', 'In Progress', 'On Hold', 'Completed')),
-  progress integer default 0 check (progress >= 0 and progress <= 100),
+  client_id text ,
+  status text not null default 'Planning',
+  progress integer default 0,
   budget numeric(14,2) default 0,
   spent numeric(14,2) default 0,
   start_date date,
@@ -51,58 +82,58 @@ create table if not exists public.projects (
   updated_at timestamptz default now()
 );
 
--- ── 4. PROJECT TEAM MEMBERS (junction) ──────────────────────
-create table if not exists public.project_members (
-  id uuid primary key default gen_random_uuid(),
-  project_id uuid references public.projects(id) on delete cascade,
-  user_id uuid references public.users(id) on delete cascade,
+-- ── 4. PROJECT TEAM MEMBERS ─────────────────────────────────
+create table public.project_members (
+  id text primary key default 'PM-' || substr(md5(random()::text), 1, 8),
+  project_id text ,
+  user_id text ,
   role text,
   unique(project_id, user_id)
 );
 
 -- ── 5. PROJECT TASKS ────────────────────────────────────────
-create table if not exists public.tasks (
-  id uuid primary key default gen_random_uuid(),
-  project_id uuid references public.projects(id) on delete cascade,
+create table public.tasks (
+  id text primary key default 'TSK-' || substr(md5(random()::text), 1, 8),
+  project_id text ,
   name text not null,
   phase text,
-  status text not null default 'Pending' check (status in ('Pending', 'In Progress', 'Completed', 'On Hold')),
-  assignee_id uuid references public.users(id) on delete set null,
+  status text not null default 'Pending',
+  assignee_id text ,
   assignee_name text,
   sort_order integer default 0,
   created_at timestamptz default now()
 );
 
 -- ── 6. DAILY LOGS ───────────────────────────────────────────
-create table if not exists public.daily_logs (
-  id uuid primary key default gen_random_uuid(),
-  project_id uuid references public.projects(id) on delete cascade,
+create table public.daily_logs (
+  id text primary key default 'DL-' || substr(md5(random()::text), 1, 8),
+  project_id text ,
   log_date date not null,
   summary text,
   crew_count integer default 0,
-  created_by uuid references public.users(id) on delete set null,
+  created_by text ,
   created_at timestamptz default now()
 );
 
 -- ── 7. ESTIMATES ────────────────────────────────────────────
-create table if not exists public.estimates (
-  id uuid primary key default gen_random_uuid(),
-  estimate_number text unique,
-  client_id uuid references public.clients(id) on delete set null,
+create table public.estimates (
+  id text primary key,
+  client_id text ,
   project_name text,
-  status text not null default 'Draft' check (status in ('Draft', 'Sent', 'Accepted', 'Rejected')),
+  status text not null default 'Draft',
   subtotal numeric(14,2) default 0,
   tax numeric(14,2) default 0,
   grand_total numeric(14,2) default 0,
   valid_until date,
+  estimate_date date,
   created_at timestamptz default now(),
   updated_at timestamptz default now()
 );
 
 -- ── 8. ESTIMATE LINE ITEMS ──────────────────────────────────
-create table if not exists public.estimate_line_items (
-  id uuid primary key default gen_random_uuid(),
-  estimate_id uuid references public.estimates(id) on delete cascade,
+create table public.estimate_line_items (
+  id text primary key default 'ELI-' || substr(md5(random()::text), 1, 8),
+  estimate_id text ,
   description text not null,
   quantity numeric(10,2) default 1,
   unit_cost numeric(14,2) default 0,
@@ -111,36 +142,48 @@ create table if not exists public.estimate_line_items (
 );
 
 -- ── 9. INVOICES ─────────────────────────────────────────────
-create table if not exists public.invoices (
-  id uuid primary key default gen_random_uuid(),
+create table public.invoices (
+  id text primary key,
   invoice_number text unique,
-  client_id uuid references public.clients(id) on delete set null,
-  project_id uuid references public.projects(id) on delete set null,
-  amount numeric(14,2) not null,
+  client_id text,
+  project_id text,
+  amount numeric(14,2) not null default 0,
   due_date date,
   issue_date date,
   paid_date date,
-  status text not null default 'Pending' check (status in ('Draft', 'Pending', 'Paid', 'Overdue')),
+  status text not null default 'Pending',
   terms text default 'Net 30',
   notes text,
+  -- G702 fields
+  original_contract_sum numeric(14,2) default 0,
+  net_change_orders numeric(14,2) default 0,
+  retainage_percent numeric(5,2) default 2.5,
+  stored_materials_retainage numeric(5,2) default 0,
+  previous_payments numeric(14,2) default 0,
+  contract_date date,
   created_at timestamptz default now(),
   updated_at timestamptz default now()
 );
 
 -- ── 10. INVOICE LINE ITEMS ──────────────────────────────────
-create table if not exists public.invoice_line_items (
-  id uuid primary key default gen_random_uuid(),
-  invoice_id uuid references public.invoices(id) on delete cascade,
+create table public.invoice_line_items (
+  id text primary key default 'ILI-' || substr(md5(random()::text), 1, 8),
+  invoice_id text ,
   description text not null,
   quantity numeric(10,2) default 1,
   unit_cost numeric(14,2) default 0,
   total numeric(14,2) default 0,
+  -- G703 fields
+  scheduled_value numeric(14,2) default 0,
+  previously_completed numeric(14,2) default 0,
+  this_period numeric(14,2) default 0,
+  materials_stored numeric(14,2) default 0,
   sort_order integer default 0
 );
 
 -- ── 11. SUBCONTRACTORS ──────────────────────────────────────
-create table if not exists public.subcontractors (
-  id uuid primary key default gen_random_uuid(),
+create table public.subcontractors (
+  id text primary key,
   name text not null,
   trade text,
   contact_person text,
@@ -150,36 +193,36 @@ create table if not exists public.subcontractors (
   license_number text,
   insurance_expiry date,
   rating numeric(2,1) default 0,
-  status text not null default 'Active' check (status in ('Active', 'Inactive')),
-  certifications text[], -- array of certification names
+  status text not null default 'Active',
+  certifications text[],
   created_at timestamptz default now(),
   updated_at timestamptz default now()
 );
 
 -- ── 12. TIMESHEET ENTRIES ───────────────────────────────────
-create table if not exists public.timesheet_entries (
-  id uuid primary key default gen_random_uuid(),
-  user_id uuid references public.users(id) on delete set null,
+create table public.timesheet_entries (
+  id text primary key,
+  user_id text ,
   employee_name text,
-  project_id uuid references public.projects(id) on delete set null,
+  project_id text ,
   project_name text,
   phase text,
   entry_date date not null,
   clock_in time,
   clock_out time,
   hours numeric(5,2) default 0,
-  status text not null default 'Pending Approval' check (status in ('Pending Approval', 'Approved', 'Rejected')),
+  status text not null default 'Pending Approval',
   created_at timestamptz default now()
 );
 
 -- ── 13. CHANGE ORDERS ───────────────────────────────────────
-create table if not exists public.change_orders (
-  id uuid primary key default gen_random_uuid(),
+create table public.change_orders (
+  id text primary key,
   co_number text unique,
-  project_id uuid references public.projects(id) on delete set null,
+  project_id text ,
   description text not null,
   amount numeric(14,2) default 0,
-  status text not null default 'Pending' check (status in ('Pending', 'Approved', 'Under Review', 'Rejected')),
+  status text not null default 'Pending',
   requested_by text,
   co_date date,
   created_at timestamptz default now(),
@@ -187,9 +230,9 @@ create table if not exists public.change_orders (
 );
 
 -- ── 14. CHANGE ORDER VERSIONS ───────────────────────────────
-create table if not exists public.change_order_versions (
-  id uuid primary key default gen_random_uuid(),
-  change_order_id uuid references public.change_orders(id) on delete cascade,
+create table public.change_order_versions (
+  id text primary key default 'COV-' || substr(md5(random()::text), 1, 8),
+  change_order_id text ,
   version_number integer not null,
   amount numeric(14,2) default 0,
   notes text,
@@ -198,12 +241,12 @@ create table if not exists public.change_order_versions (
 );
 
 -- ── 15. RFIs ────────────────────────────────────────────────
-create table if not exists public.rfis (
-  id uuid primary key default gen_random_uuid(),
+create table public.rfis (
+  id text primary key,
   rfi_number text unique,
-  project_id uuid references public.projects(id) on delete set null,
+  project_id text ,
   subject text not null,
-  status text not null default 'Open' check (status in ('Open', 'Responded', 'Closed')),
+  status text not null default 'Open',
   submitted_by text,
   date_submitted date,
   date_responded date,
@@ -212,27 +255,30 @@ create table if not exists public.rfis (
 );
 
 -- ── 16. DOCUMENTS ───────────────────────────────────────────
-create table if not exists public.documents (
-  id uuid primary key default gen_random_uuid(),
+create table public.documents (
+  id text primary key default 'DOC-' || substr(md5(random()::text), 1, 8),
   name text not null,
   file_type text,
-  project_id uuid references public.projects(id) on delete set null,
+  project_id text ,
   category text,
   file_size text,
-  file_url text, -- Supabase Storage URL
-  uploaded_by uuid references public.users(id) on delete set null,
+  file_url text,
+  uploaded_by text ,
   uploaded_by_name text,
   upload_date date default current_date,
   created_at timestamptz default now()
 );
 
 -- ── 17. PAY APPLICATIONS (AIA G702) ────────────────────────
-create table if not exists public.pay_applications (
-  id uuid primary key default gen_random_uuid(),
+create table public.pay_applications (
+  id text primary key,
   application_no integer not null,
-  project_id uuid references public.projects(id) on delete set null,
+  project_id text ,
   is_subcontractor_version boolean default false,
-  subcontractor_id uuid references public.subcontractors(id) on delete set null,
+  subcontractor_id text ,
+  project_name text,
+  project_location text,
+  subcontractor text,
   owner_name text,
   owner_address text,
   contractor_name text default 'Boulder Construction',
@@ -247,7 +293,7 @@ create table if not exists public.pay_applications (
   net_change_orders numeric(14,2) default 0,
   contract_sum_to_date numeric(14,2) default 0,
   total_completed_and_stored numeric(14,2) default 0,
-  retainage_percent numeric(5,2) default 10,
+  retainage_percent text default '10',
   retainage_on_completed numeric(14,2) default 0,
   retainage_on_stored numeric(14,2) default 0,
   total_retainage numeric(14,2) default 0,
@@ -255,8 +301,7 @@ create table if not exists public.pay_applications (
   less_previous_certificates numeric(14,2) default 0,
   current_payment_due numeric(14,2) default 0,
   balance_to_finish numeric(14,2) default 0,
-  status text not null default 'Draft' check (status in ('Draft', 'Submitted', 'Approved', 'Paid', 'Rejected')),
-  -- Change order summary
+  status text not null default 'Draft',
   co_previous_additions numeric(14,2) default 0,
   co_previous_deductions numeric(14,2) default 0,
   co_this_month_additions numeric(14,2) default 0,
@@ -266,9 +311,9 @@ create table if not exists public.pay_applications (
 );
 
 -- ── 18. PAY APPLICATION LINE ITEMS (G703) ───────────────────
-create table if not exists public.pay_application_line_items (
-  id uuid primary key default gen_random_uuid(),
-  pay_application_id uuid references public.pay_applications(id) on delete cascade,
+create table public.pay_application_line_items (
+  id text primary key default 'PALI-' || substr(md5(random()::text), 1, 8),
+  pay_application_id text ,
   item_no integer not null,
   description text not null,
   scheduled_value numeric(14,2) default 0,
@@ -284,9 +329,9 @@ create table if not exists public.pay_application_line_items (
 );
 
 -- ── 19. PAY APP BACKUP / DRAW HISTORY ───────────────────────
-create table if not exists public.pay_app_draw_history (
-  id uuid primary key default gen_random_uuid(),
-  pay_application_id uuid references public.pay_applications(id) on delete cascade,
+create table public.pay_app_draw_history (
+  id text primary key default 'PADH-' || substr(md5(random()::text), 1, 8),
+  pay_application_id text ,
   draw_number integer not null,
   g703_item_no integer,
   description text,
@@ -297,67 +342,66 @@ create table if not exists public.pay_app_draw_history (
   sort_order integer default 0
 );
 
--- ── 20. LIEN WAIVERS ────────────────────────────────────────
-create table if not exists public.lien_waivers (
-  id uuid primary key default gen_random_uuid(),
-  form_type text not null check (form_type in ('K1', 'K2', 'K3', 'K4')),
-  form_title text,
-  statute text default 'TEX. PROP. CODE § 53.284',
-  project_id uuid references public.projects(id) on delete set null,
-  pay_application_id uuid references public.pay_applications(id) on delete set null,
-  owner_name text,
-  owner_address text,
-  property_location text,
-  signer_company text,
+-- ── 20. LIEN WAIVERS (Affidavit, Release and Waiver of Lien) ─
+create table public.lien_waivers (
+  id text primary key,
+  waiver_category text not null default 'Partial',   -- 'Partial' or 'Final'
+  condition_type text not null default 'Conditional', -- 'Conditional' or 'Unconditional'
+  project_id text,
+  project_name text,
+  pay_application_id text,
   signer_name text,
+  furnisher text,
+  owner_contractor text,
+  job_name_address text,
+  waiver_amount numeric(14,2) default 0,
+  final_balance numeric(14,2) default 0,
+  payment_condition text,
+  signer_company text,
   signer_title text,
-  maker_of_check text default 'Boulder Construction',
-  check_amount numeric(14,2) default 0,
-  payable_to text,
-  job_description text,
   waiver_date date,
-  status text not null default 'Draft' check (status in ('Draft', 'Pending Signature', 'Signed')),
+  status text not null default 'Draft',
   created_at timestamptz default now(),
   updated_at timestamptz default now()
 );
 
 -- ── 21. COMMUNICATION LOG ───────────────────────────────────
-create table if not exists public.communication_log (
-  id uuid primary key default gen_random_uuid(),
-  client_id uuid references public.clients(id) on delete cascade,
+create table public.communication_log (
+  id text primary key default 'COM-' || substr(md5(random()::text), 1, 8),
+  client_id text ,
   comm_date date,
-  comm_type text check (comm_type in ('Email', 'Phone', 'Meeting', 'Text', 'Other')),
+  comm_type text,
   subject text,
   notes text,
-  created_by uuid references public.users(id) on delete set null,
+  created_by text ,
   created_at timestamptz default now()
 );
 
 -- ── 22. NOTIFICATIONS ───────────────────────────────────────
-create table if not exists public.notifications (
-  id uuid primary key default gen_random_uuid(),
-  user_id uuid references public.users(id) on delete cascade,
+create table public.notifications (
+  id text primary key default 'NOT-' || substr(md5(random()::text), 1, 8),
+  user_id text ,
   message text not null,
-  type text default 'info' check (type in ('info', 'warning', 'error', 'success')),
+  type text default 'info',
   read boolean default false,
   created_at timestamptz default now()
 );
 
 -- ── 23. SCHEDULE EVENTS ─────────────────────────────────────
-create table if not exists public.schedule_events (
-  id uuid primary key default gen_random_uuid(),
+create table public.schedule_events (
+  id text primary key default 'SCH-' || substr(md5(random()::text), 1, 8),
   title text not null,
-  project_id uuid references public.projects(id) on delete set null,
+  project_id text ,
   start_date date not null,
   end_date date,
   color text default '#3b82f6',
-  event_type text default 'task' check (event_type in ('task', 'milestone', 'delivery', 'inspection', 'meeting', 'training')),
+  event_type text default 'task',
   created_at timestamptz default now()
 );
 
 -- ── 24. MATERIAL CATALOG ────────────────────────────────────
-create table if not exists public.material_catalog (
-  id uuid primary key default gen_random_uuid(),
+create table public.material_catalog (
+  id text primary key,
   name text not null,
   unit text,
   cost_per_unit numeric(10,2) default 0,
@@ -365,10 +409,10 @@ create table if not exists public.material_catalog (
 );
 
 -- ── 25. JOB COST DATA ───────────────────────────────────────
-create table if not exists public.job_costs (
-  id uuid primary key default gen_random_uuid(),
-  project_id uuid references public.projects(id) on delete cascade,
-  category text not null check (category in ('Labor', 'Materials', 'Subcontractors', 'Equipment', 'General Conditions')),
+create table public.job_costs (
+  id text primary key default 'JC-' || substr(md5(random()::text), 1, 8),
+  project_id text ,
+  category text not null,
   budgeted numeric(14,2) default 0,
   actual numeric(14,2) default 0,
   created_at timestamptz default now()
@@ -376,11 +420,8 @@ create table if not exists public.job_costs (
 
 
 -- ============================================================
--- ROW LEVEL SECURITY (RLS) — Enable on all tables
+-- ROW LEVEL SECURITY (RLS)
 -- ============================================================
--- For now, allow all authenticated users full access.
--- Refine per-role policies in Phase 2.
-
 alter table public.users enable row level security;
 alter table public.clients enable row level security;
 alter table public.projects enable row level security;
@@ -407,55 +448,80 @@ alter table public.schedule_events enable row level security;
 alter table public.material_catalog enable row level security;
 alter table public.job_costs enable row level security;
 
--- Allow anon/authenticated full access for development (tighten in production)
-create policy "Allow all for authenticated" on public.users for all using (true) with check (true);
-create policy "Allow all for authenticated" on public.clients for all using (true) with check (true);
-create policy "Allow all for authenticated" on public.projects for all using (true) with check (true);
-create policy "Allow all for authenticated" on public.project_members for all using (true) with check (true);
-create policy "Allow all for authenticated" on public.tasks for all using (true) with check (true);
-create policy "Allow all for authenticated" on public.daily_logs for all using (true) with check (true);
-create policy "Allow all for authenticated" on public.estimates for all using (true) with check (true);
-create policy "Allow all for authenticated" on public.estimate_line_items for all using (true) with check (true);
-create policy "Allow all for authenticated" on public.invoices for all using (true) with check (true);
-create policy "Allow all for authenticated" on public.invoice_line_items for all using (true) with check (true);
-create policy "Allow all for authenticated" on public.subcontractors for all using (true) with check (true);
-create policy "Allow all for authenticated" on public.timesheet_entries for all using (true) with check (true);
-create policy "Allow all for authenticated" on public.change_orders for all using (true) with check (true);
-create policy "Allow all for authenticated" on public.change_order_versions for all using (true) with check (true);
-create policy "Allow all for authenticated" on public.rfis for all using (true) with check (true);
-create policy "Allow all for authenticated" on public.documents for all using (true) with check (true);
-create policy "Allow all for authenticated" on public.pay_applications for all using (true) with check (true);
-create policy "Allow all for authenticated" on public.pay_application_line_items for all using (true) with check (true);
-create policy "Allow all for authenticated" on public.pay_app_draw_history for all using (true) with check (true);
-create policy "Allow all for authenticated" on public.lien_waivers for all using (true) with check (true);
-create policy "Allow all for authenticated" on public.communication_log for all using (true) with check (true);
-create policy "Allow all for authenticated" on public.notifications for all using (true) with check (true);
-create policy "Allow all for authenticated" on public.schedule_events for all using (true) with check (true);
-create policy "Allow all for authenticated" on public.material_catalog for all using (true) with check (true);
-create policy "Allow all for authenticated" on public.job_costs for all using (true) with check (true);
+-- Allow full access for anon/authenticated (development — tighten for production)
+create policy "anon_all" on public.users for all to anon using (true) with check (true);
+create policy "auth_all" on public.users for all to authenticated using (true) with check (true);
+create policy "anon_all" on public.clients for all to anon using (true) with check (true);
+create policy "auth_all" on public.clients for all to authenticated using (true) with check (true);
+create policy "anon_all" on public.projects for all to anon using (true) with check (true);
+create policy "auth_all" on public.projects for all to authenticated using (true) with check (true);
+create policy "anon_all" on public.project_members for all to anon using (true) with check (true);
+create policy "auth_all" on public.project_members for all to authenticated using (true) with check (true);
+create policy "anon_all" on public.tasks for all to anon using (true) with check (true);
+create policy "auth_all" on public.tasks for all to authenticated using (true) with check (true);
+create policy "anon_all" on public.daily_logs for all to anon using (true) with check (true);
+create policy "auth_all" on public.daily_logs for all to authenticated using (true) with check (true);
+create policy "anon_all" on public.estimates for all to anon using (true) with check (true);
+create policy "auth_all" on public.estimates for all to authenticated using (true) with check (true);
+create policy "anon_all" on public.estimate_line_items for all to anon using (true) with check (true);
+create policy "auth_all" on public.estimate_line_items for all to authenticated using (true) with check (true);
+create policy "anon_all" on public.invoices for all to anon using (true) with check (true);
+create policy "auth_all" on public.invoices for all to authenticated using (true) with check (true);
+create policy "anon_all" on public.invoice_line_items for all to anon using (true) with check (true);
+create policy "auth_all" on public.invoice_line_items for all to authenticated using (true) with check (true);
+create policy "anon_all" on public.subcontractors for all to anon using (true) with check (true);
+create policy "auth_all" on public.subcontractors for all to authenticated using (true) with check (true);
+create policy "anon_all" on public.timesheet_entries for all to anon using (true) with check (true);
+create policy "auth_all" on public.timesheet_entries for all to authenticated using (true) with check (true);
+create policy "anon_all" on public.change_orders for all to anon using (true) with check (true);
+create policy "auth_all" on public.change_orders for all to authenticated using (true) with check (true);
+create policy "anon_all" on public.change_order_versions for all to anon using (true) with check (true);
+create policy "auth_all" on public.change_order_versions for all to authenticated using (true) with check (true);
+create policy "anon_all" on public.rfis for all to anon using (true) with check (true);
+create policy "auth_all" on public.rfis for all to authenticated using (true) with check (true);
+create policy "anon_all" on public.documents for all to anon using (true) with check (true);
+create policy "auth_all" on public.documents for all to authenticated using (true) with check (true);
+create policy "anon_all" on public.pay_applications for all to anon using (true) with check (true);
+create policy "auth_all" on public.pay_applications for all to authenticated using (true) with check (true);
+create policy "anon_all" on public.pay_application_line_items for all to anon using (true) with check (true);
+create policy "auth_all" on public.pay_application_line_items for all to authenticated using (true) with check (true);
+create policy "anon_all" on public.pay_app_draw_history for all to anon using (true) with check (true);
+create policy "auth_all" on public.pay_app_draw_history for all to authenticated using (true) with check (true);
+create policy "anon_all" on public.lien_waivers for all to anon using (true) with check (true);
+create policy "auth_all" on public.lien_waivers for all to authenticated using (true) with check (true);
+create policy "anon_all" on public.communication_log for all to anon using (true) with check (true);
+create policy "auth_all" on public.communication_log for all to authenticated using (true) with check (true);
+create policy "anon_all" on public.notifications for all to anon using (true) with check (true);
+create policy "auth_all" on public.notifications for all to authenticated using (true) with check (true);
+create policy "anon_all" on public.schedule_events for all to anon using (true) with check (true);
+create policy "auth_all" on public.schedule_events for all to authenticated using (true) with check (true);
+create policy "anon_all" on public.material_catalog for all to anon using (true) with check (true);
+create policy "auth_all" on public.material_catalog for all to authenticated using (true) with check (true);
+create policy "anon_all" on public.job_costs for all to anon using (true) with check (true);
+create policy "auth_all" on public.job_costs for all to authenticated using (true) with check (true);
 
 
 -- ============================================================
--- INDEXES for common queries
+-- INDEXES
 -- ============================================================
-create index if not exists idx_projects_client on public.projects(client_id);
-create index if not exists idx_projects_status on public.projects(status);
-create index if not exists idx_invoices_client on public.invoices(client_id);
-create index if not exists idx_invoices_project on public.invoices(project_id);
-create index if not exists idx_invoices_status on public.invoices(status);
-create index if not exists idx_tasks_project on public.tasks(project_id);
-create index if not exists idx_timesheet_user on public.timesheet_entries(user_id);
-create index if not exists idx_timesheet_project on public.timesheet_entries(project_id);
-create index if not exists idx_pay_apps_project on public.pay_applications(project_id);
-create index if not exists idx_lien_waivers_project on public.lien_waivers(project_id);
-create index if not exists idx_change_orders_project on public.change_orders(project_id);
-create index if not exists idx_documents_project on public.documents(project_id);
-create index if not exists idx_schedule_events_project on public.schedule_events(project_id);
-create index if not exists idx_job_costs_project on public.job_costs(project_id);
+create index idx_projects_client on public.projects(client_id);
+create index idx_projects_status on public.projects(status);
+create index idx_invoices_client on public.invoices(client_id);
+create index idx_invoices_project on public.invoices(project_id);
+create index idx_invoices_status on public.invoices(status);
+create index idx_tasks_project on public.tasks(project_id);
+create index idx_timesheet_user on public.timesheet_entries(user_id);
+create index idx_timesheet_project on public.timesheet_entries(project_id);
+create index idx_pay_apps_project on public.pay_applications(project_id);
+create index idx_lien_waivers_project on public.lien_waivers(project_id);
+create index idx_change_orders_project on public.change_orders(project_id);
+create index idx_documents_project on public.documents(project_id);
+create index idx_schedule_events_project on public.schedule_events(project_id);
+create index idx_job_costs_project on public.job_costs(project_id);
 
 
 -- ============================================================
--- UPDATED_AT trigger function
+-- UPDATED_AT trigger
 -- ============================================================
 create or replace function public.update_updated_at()
 returns trigger as $$
@@ -465,7 +531,6 @@ begin
 end;
 $$ language plpgsql;
 
--- Apply to tables with updated_at column
 create trigger set_updated_at before update on public.users for each row execute function public.update_updated_at();
 create trigger set_updated_at before update on public.clients for each row execute function public.update_updated_at();
 create trigger set_updated_at before update on public.projects for each row execute function public.update_updated_at();

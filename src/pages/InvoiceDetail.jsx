@@ -1,34 +1,145 @@
-import { useParams, Link } from 'react-router-dom';
-import { ArrowLeft, Printer, Download, HardHat } from 'lucide-react';
-import { invoices, clients, projects } from '../data/mockData';
+import { useCallback, useState } from 'react';
+import { useParams, Link, useNavigate } from 'react-router-dom';
+import { ArrowLeft, Printer, Download, HardHat, CheckCircle, Loader2 } from 'lucide-react';
+import { payApplications as mockPayApps, subPayApplications as mockSubPayApps, clients as mockClients, projects as mockProjects } from '../data/mockData';
+import { invoiceService } from '../services/supabaseService';
+import { useSupabaseById } from '../hooks/useSupabase';
+import { downloadPdf } from '../utils/downloadPdf';
 
-const formatCurrency = (amount) =>
-  new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(amount);
+/* ================================================================
+   UTILITY FUNCTIONS
+   ================================================================ */
 
-const formatDate = (dateStr) =>
-  new Date(dateStr).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
-
-const formatDateShort = (dateStr) =>
-  new Date(dateStr).toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' });
-
-const getContractDate = (issueDateStr) => {
-  const d = new Date(issueDateStr);
-  d.setDate(d.getDate() - 30);
-  return formatDateShort(d.toISOString());
+const formatCurrency = (amount) => {
+  const num = parseFloat(amount) || 0;
+  if (num < 0) {
+    return `($${Math.abs(num).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })})`;
+  }
+  return `$${num.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 };
 
-const extractNumber = (id) => {
-  const match = id.match(/(\d+)$/);
-  return match ? parseInt(match[1], 10) : id;
+const formatDateShort = (dateStr) => {
+  if (!dateStr) return '';
+  return new Date(dateStr).toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' });
 };
 
-/* ---- shared styles ---- */
+const addDays = (dateStr, days) => {
+  if (!dateStr) return '';
+  const d = new Date(dateStr);
+  d.setDate(d.getDate() + days);
+  return d.toISOString().split('T')[0];
+};
+
+/* ================================================================
+   NORMALIZER — maps both Supabase (snake_case) and mock (camelCase)
+   into a unified shape
+   ================================================================ */
+
+function normalizeLineItem(li) {
+  const scheduledValue = parseFloat(li.scheduled_value ?? li.scheduledValue ?? li.total ?? 0);
+  const previousApplication = parseFloat(li.previous_application ?? li.previousApplication ?? li.previously_completed ?? 0);
+  const thisPeriod = parseFloat(li.this_period ?? li.thisPeriod ?? li.thisPeroid ?? 0);
+  const materialsStored = parseFloat(li.materials_stored ?? li.materialsStored ?? 0);
+  const totalCompleted = parseFloat(li.total_completed ?? li.totalCompleted ?? (previousApplication + thisPeriod + materialsStored));
+  const percentComplete = parseFloat(li.percent_complete ?? li.percentComplete ?? (scheduledValue !== 0 ? (totalCompleted / scheduledValue) * 100 : 0));
+  const balanceToFinish = parseFloat(li.balance_to_finish ?? li.balanceToFinish ?? (scheduledValue - totalCompleted));
+  const retainage = parseFloat(li.retainage ?? 0);
+  const isChangeOrder = !!(li.is_change_order) || /^CO\s*#/i.test(li.description || '');
+
+  return {
+    itemNo: li.item_no ?? li.itemNo ?? 0,
+    description: li.description || '',
+    scheduledValue,
+    previousApplication,
+    thisPeriod,
+    materialsStored,
+    totalCompleted,
+    percentComplete,
+    balanceToFinish,
+    retainage,
+    isChangeOrder,
+  };
+}
+
+function normalizeInvoice(raw) {
+  if (!raw) return null;
+
+  const retainagePercent = parseFloat(raw.retainage_percent ?? raw.retainagePercent ?? 10);
+
+  // Gather raw line items from whichever source provides them
+  const rawLineItems = raw.pay_application_line_items || raw.lineItems || raw.invoice_line_items || [];
+  const lineItems = rawLineItems.map((li) => normalizeLineItem(li));
+
+  return {
+    id: raw.id,
+    applicationNo: raw.application_no ?? raw.applicationNo ?? 1,
+    projectId: raw.project_id ?? raw.projectId ?? null,
+    projectName: raw.project_name ?? raw.projectName ?? raw.contract_for ?? raw.contractFor ?? '',
+    owner: raw.owner_name ?? raw.owner ?? '',
+    ownerAddress: raw.owner_address ?? raw.ownerAddress ?? '',
+    contractor: raw.contractor_name ?? raw.contractor ?? 'Boulder Construction',
+    contractorAddress: raw.contractor_address ?? raw.contractorAddress ?? '123 Commerce Way, Newark, NJ 07102',
+    architect: raw.architect ?? '',
+    architectAddress: raw.architect_address ?? raw.architectAddress ?? '',
+    contractFor: raw.contract_for ?? raw.contractFor ?? '',
+    contractDate: raw.contract_date ?? raw.contractDate ?? '',
+    periodTo: raw.period_to ?? raw.periodTo ?? raw.application_date ?? raw.applicationDate ?? '',
+    applicationDate: raw.application_date ?? raw.applicationDate ?? '',
+    status: raw.status || 'Pending',
+    isSubcontractorVersion: raw.isSubcontractorVersion ?? raw.is_subcontractor_version ?? false,
+    subcontractor: raw.subcontractor ?? raw.subcontractor_name ?? raw.from_subcontractor ?? '',
+    
+    // Distribution fields (AIA G702)
+    distributionOwner: raw.distribution_owner ?? true,
+    distributionArchitect: raw.distribution_architect ?? false,
+    distributionContractor: raw.distribution_contractor ?? false,
+
+    // G702 summary lines
+    originalContractSum: parseFloat(raw.original_contract_sum ?? raw.originalContractSum ?? 0),
+    netChangeOrders: parseFloat(raw.net_change_orders ?? raw.netChangeOrders ?? 0),
+    contractSumToDate: parseFloat(raw.contract_sum_to_date ?? raw.contractSumToDate ?? 0),
+    totalCompletedAndStored: parseFloat(raw.total_completed_and_stored ?? raw.totalCompletedAndStored ?? 0),
+    retainagePercent,
+    retainageOnCompleted: parseFloat(raw.retainage_on_completed ?? raw.retainageOnCompleted ?? 0),
+    retainageOnStored: parseFloat(raw.retainage_on_stored ?? raw.retainageOnStored ?? 0),
+    totalRetainage: parseFloat(raw.total_retainage ?? raw.totalRetainage ?? 0),
+    totalEarnedLessRetainage: parseFloat(raw.total_earned_less_retainage ?? raw.totalEarnedLessRetainage ?? 0),
+    lessPreviousCertificates: parseFloat(raw.less_previous_certificates ?? raw.lessPreviousCertificates ?? 0),
+    currentPaymentDue: parseFloat(raw.current_payment_due ?? raw.currentPaymentDue ?? raw.amount ?? 0),
+    balanceToFinish: parseFloat(raw.balance_to_finish ?? raw.balanceToFinish ?? 0),
+
+    // Change order summary (AIA G702)
+    coPreviousAdditions: parseFloat(raw.co_previous_additions ?? raw.changeOrderSummary?.previousAdditions ?? 0),
+    coPreviousDeductions: parseFloat(raw.co_previous_deductions ?? raw.changeOrderSummary?.previousDeductions ?? 0),
+    coThisMonthAdditions: parseFloat(raw.co_this_month_additions ?? raw.changeOrderSummary?.thisMonthAdditions ?? 0),
+    coThisMonthDeductions: parseFloat(raw.co_this_month_deductions ?? raw.changeOrderSummary?.thisMonthDeductions ?? 0),
+
+    lineItems,
+
+    // Backup draw history (only on some records, e.g. SPA-001)
+    backupDrawHistory: raw.backupDrawHistory ?? raw.backup_draw_history ?? null,
+  };
+}
+
+/* ================================================================
+   SHARED STYLES
+   ================================================================ */
+
 const cellBorder = { border: '1px solid #999', padding: '6px 10px', fontSize: '0.8rem', verticalAlign: 'top' };
 const cellBorderBold = { ...cellBorder, fontWeight: 700 };
 const labelStyle = { fontWeight: 700, fontSize: '0.7rem', color: '#333', textTransform: 'uppercase', letterSpacing: '0.03em' };
 const valStyle = { fontSize: '0.8rem', color: '#1e293b' };
 const outerBorder = { border: '2px solid #000' };
-const thinBorder = { border: '1px solid #bbb' };
+
+const pageStyle = {
+  maxWidth: 1000, margin: '0 auto', background: '#fff', padding: '36px 44px',
+  border: '1px solid #ddd', marginBottom: 24, position: 'relative',
+  fontFamily: 'system-ui, -apple-system, sans-serif',
+};
+
+/* ================================================================
+   BOULDER LOGO COMPONENT
+   ================================================================ */
 
 const Logo = () => (
   <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
@@ -45,9 +156,81 @@ const Logo = () => (
   </div>
 );
 
+/* ================================================================
+   MAIN COMPONENT
+   ================================================================ */
+
 export default function InvoiceDetail() {
   const { id } = useParams();
-  const invoice = invoices.find((i) => i.id === id);
+  const navigate = useNavigate();
+  const [activeTab, setActiveTab] = useState('g702');
+  const [markingPaid, setMarkingPaid] = useState(false);
+
+  // Mock finder: search BOTH payApplications and subPayApplications
+  const mockFinder = useCallback(
+    (searchId) =>
+      mockPayApps.find((i) => i.id === searchId) ||
+      mockSubPayApps.find((i) => i.id === searchId) ||
+      null,
+    []
+  );
+
+  // Fetch from Supabase (pay_applications table) with mock fallback
+  const { data: rawInvoice, loading, error, setData: setRawData } = useSupabaseById(invoiceService.getById, id, mockFinder);
+
+  // Normalize into unified shape
+  const invoice = rawInvoice ? normalizeInvoice(rawInvoice) : null;
+
+  // Resolve client/project from mock data for address enrichment
+  const resolveClient = (inv) => {
+    if (!inv) return null;
+    const cId = inv.projectId ? mockProjects.find(p => p.id === inv.projectId)?.clientId : null;
+    return mockClients.find(c => c.id === cId) || null;
+  };
+
+  const resolveProject = (inv) => {
+    if (!inv) return null;
+    return mockProjects.find(p => p.id === inv.projectId) || null;
+  };
+
+  const getInvoiceNumber = () => {
+    if (!invoice) return '';
+    return String(invoice.applicationNo);
+  };
+
+  // Mark as Paid handler
+  const handleMarkPaid = async () => {
+    setMarkingPaid(true);
+    try {
+      await invoiceService.markPaid(id);
+      const updated = await invoiceService.getById(id);
+      setRawData(updated);
+    } catch (err) {
+      console.error('Failed to mark as paid:', err);
+      alert('Failed to mark as paid: ' + err.message);
+    } finally {
+      setMarkingPaid(false);
+    }
+  };
+
+  // PDF download for active tab
+  const handleDownload = () => {
+    const tabId = activeTab === 'g702' ? 'invoice-g702-content'
+                : activeTab === 'g703' ? 'invoice-g703-content'
+                : 'invoice-backup-content';
+    downloadPdf(tabId, `Invoice-${getInvoiceNumber()}-${activeTab.toUpperCase()}`);
+  };
+
+  /* ---- Loading / Error states ---- */
+  if (loading) {
+    return (
+      <div style={{ padding: '1.5rem', display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '60vh', color: '#64748b', gap: '0.5rem' }}>
+        <Loader2 size={20} style={{ animation: 'spin 1s linear infinite' }} />
+        <span>Loading invoice...</span>
+        <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
+      </div>
+    );
+  }
 
   if (!invoice) {
     return (
@@ -62,391 +245,631 @@ export default function InvoiceDetail() {
     );
   }
 
-  const client = clients.find((c) => c.id === invoice.clientId);
-  const project = projects.find((p) => p.id === invoice.projectId);
-  const appNum = extractNumber(invoice.id);
-  const retainageRate = 0.025; // 2.5%
+  /* ---- Derived values ---- */
+  const client = resolveClient(invoice);
+  const project = resolveProject(invoice);
+  const status = invoice.status;
+  const hasBackup = !!(invoice.backupDrawHistory && invoice.backupDrawHistory.length > 0);
 
-  /* ---- Calculations ---- */
-  const lineItemsTotal = invoice.lineItems.reduce((s, li) => s + li.total, 0);
-  const originalContractSum = project ? project.budget : lineItemsTotal;
-  const contractSumToDate = originalContractSum; // no change orders applied
-  const totalCompletedStored = project ? project.spent : lineItemsTotal;
-  const retainageCompleted = totalCompletedStored * retainageRate;
-  const retainageStored = 0;
-  const totalRetainage = retainageCompleted + retainageStored;
-  const totalEarnedLessRetainage = totalCompletedStored - totalRetainage;
-  const currentPaymentDue = invoice.amount;
-  const previousApplications = totalEarnedLessRetainage - currentPaymentDue;
-  const balanceToFinish = contractSumToDate - totalEarnedLessRetainage;
+  const ownerDisplay = invoice.owner || (client ? client.company : '');
+  const ownerAddressDisplay = invoice.ownerAddress || (client ? client.address : '');
+  const projectNameDisplay = invoice.projectName || invoice.contractFor || (project ? project.name : '');
+  const contractDateDisplay = invoice.contractDate || '';
+  const periodToDisplay = invoice.periodTo || '';
+  const paymentDueDate = addDays(periodToDisplay, 30);
 
-  const statusColor = invoice.status === 'Paid' ? '#16a34a' : invoice.status === 'Overdue' ? '#dc2626' : '#d97706';
-  const statusBg = invoice.status === 'Paid' ? '#dcfce7' : invoice.status === 'Overdue' ? '#fef2f2' : '#fffbeb';
+  const statusColor = status === 'Paid' ? '#16a34a' : status === 'Overdue' ? '#dc2626' : '#d97706';
+  const statusBg = status === 'Paid' ? '#dcfce7' : status === 'Overdue' ? '#fef2f2' : '#fffbeb';
 
-  /* ---- Page wrapper style ---- */
-  const pageStyle = {
-    maxWidth: 1000, margin: '0 auto', background: '#fff', padding: '36px 44px',
-    border: '1px solid #ddd', marginBottom: 24, position: 'relative', fontFamily: 'system-ui, -apple-system, sans-serif',
-  };
+  // Separate base items and change order items
+  const baseItems = invoice.lineItems.filter(li => !li.isChangeOrder);
+  const coItems = invoice.lineItems.filter(li => li.isChangeOrder);
 
-  /* ============================================================
+  // Grand totals from normalized line items
+  const gtScheduled = invoice.lineItems.reduce((s, li) => s + li.scheduledValue, 0);
+  const gtPrevious = invoice.lineItems.reduce((s, li) => s + li.previousApplication, 0);
+  const gtThisPeriod = invoice.lineItems.reduce((s, li) => s + li.thisPeriod, 0);
+  const gtMaterials = invoice.lineItems.reduce((s, li) => s + li.materialsStored, 0);
+  const gtTotalCompleted = invoice.lineItems.reduce((s, li) => s + li.totalCompleted, 0);
+  const gtBalance = invoice.lineItems.reduce((s, li) => s + li.balanceToFinish, 0);
+  const gtRetainage = invoice.lineItems.reduce((s, li) => s + li.retainage, 0);
+  const gtPercent = gtScheduled !== 0 ? (gtTotalCompleted / gtScheduled) * 100 : 0;
+
+  // Change order summary totals
+  const coTotalAdditions = invoice.coPreviousAdditions + invoice.coThisMonthAdditions;
+  const coTotalDeductions = invoice.coPreviousDeductions + invoice.coThisMonthDeductions;
+  const coNetChanges = coTotalAdditions - coTotalDeductions;
+
+  /* ================================================================
+     TAB BUTTON STYLE HELPER
+     ================================================================ */
+  const tabBtnStyle = (tabKey) => ({
+    padding: '8px 18px',
+    borderRadius: 6,
+    border: activeTab === tabKey ? '2px solid #f59e0b' : '1px solid #cbd5e1',
+    background: activeTab === tabKey ? '#fffbeb' : '#fff',
+    color: activeTab === tabKey ? '#92400e' : '#475569',
+    cursor: 'pointer',
+    fontSize: '0.85rem',
+    fontWeight: activeTab === tabKey ? 700 : 500,
+  });
+
+  /* ================================================================
      RENDER
-     ============================================================ */
+     ================================================================ */
   return (
     <div style={{ padding: '1.5rem', background: '#f1f5f9', minHeight: '100vh' }}>
 
-      {/* ---- ACTION BAR (hidden on print) ---- */}
-      <div className="no-print" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', maxWidth: 1000, margin: '0 auto 1rem' }}>
+      {/* ================================================================
+          ACTION BAR (hidden on print)
+          ================================================================ */}
+      <div className="no-print" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', maxWidth: 1000, margin: '0 auto 1rem', flexWrap: 'wrap', gap: '0.75rem' }}>
+        {/* Left: back link */}
         <Link to="/invoices" style={{ color: '#64748b', textDecoration: 'none', display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.875rem', fontWeight: 500 }}>
           <ArrowLeft size={16} /> Back to Invoices
         </Link>
+
+        {/* Center: tab buttons */}
+        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+          <button onClick={() => setActiveTab('g702')} style={tabBtnStyle('g702')}>
+            G702 &mdash; Application
+          </button>
+          <button onClick={() => setActiveTab('g703')} style={tabBtnStyle('g703')}>
+            G703 &mdash; Continuation Sheet
+          </button>
+          {hasBackup && (
+            <button onClick={() => setActiveTab('backup')} style={tabBtnStyle('backup')}>
+              Backup
+            </button>
+          )}
+        </div>
+
+        {/* Right: action buttons + status */}
         <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
           <span style={{
             display: 'inline-block', padding: '4px 14px', borderRadius: 999, fontSize: '0.8rem', fontWeight: 700,
             color: statusColor, background: statusBg, border: `1px solid ${statusColor}`,
           }}>
-            {invoice.status}
+            {status}
           </span>
+
+          {(status === 'Submitted' || status === 'Pending') && (
+            <button
+              onClick={handleMarkPaid}
+              disabled={markingPaid}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 6, padding: '8px 16px', borderRadius: 6,
+                border: '1px solid #16a34a', background: '#dcfce7', color: '#16a34a',
+                cursor: markingPaid ? 'not-allowed' : 'pointer', fontSize: '0.85rem', fontWeight: 600,
+                opacity: markingPaid ? 0.6 : 1,
+              }}
+            >
+              {markingPaid
+                ? <Loader2 size={16} style={{ animation: 'spin 1s linear infinite' }} />
+                : <CheckCircle size={16} />}
+              Mark as Paid
+            </button>
+          )}
+
           <button onClick={() => window.print()} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 16px', borderRadius: 6, border: '1px solid #cbd5e1', background: '#fff', cursor: 'pointer', fontSize: '0.85rem', fontWeight: 500 }}>
             <Printer size={16} /> Print
           </button>
-          <button onClick={() => alert('PDF download is a placeholder.')} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 16px', borderRadius: 6, border: 'none', background: '#f59e0b', color: '#fff', cursor: 'pointer', fontSize: '0.85rem', fontWeight: 600 }}>
+
+          <button onClick={handleDownload} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 16px', borderRadius: 6, border: 'none', background: '#f59e0b', color: '#fff', cursor: 'pointer', fontSize: '0.85rem', fontWeight: 600 }}>
             <Download size={16} /> Download PDF
           </button>
         </div>
       </div>
 
-      {/* ==================================================================
-          PAGE 1 — APPLICATION FOR PAYMENT
-          ================================================================== */}
-      <div style={pageStyle}>
+      {/* ================================================================
+          TAB 1: G702 — APPLICATION FOR PAYMENT
+          ================================================================ */}
+      {activeTab === 'g702' && (
+        <div id="invoice-g702-content" style={pageStyle}>
 
-        {/* PAID watermark */}
-        {invoice.status === 'Paid' && (
-          <div style={{
-            position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%) rotate(-30deg)',
-            fontSize: '8rem', fontWeight: 900, color: 'rgba(22,163,74,0.07)', pointerEvents: 'none',
-            letterSpacing: '0.1em', zIndex: 0, userSelect: 'none',
-          }}>PAID</div>
-        )}
+          {/* PAID watermark */}
+          {status === 'Paid' && (
+            <div style={{
+              position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%) rotate(-30deg)',
+              fontSize: '8rem', fontWeight: 900, color: 'rgba(22,163,74,0.07)', pointerEvents: 'none',
+              letterSpacing: '0.1em', zIndex: 0, userSelect: 'none',
+            }}>PAID</div>
+          )}
 
-        {/* TOP: Logo + Title */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 20, position: 'relative', zIndex: 1 }}>
-          <Logo />
-          <div style={{ textAlign: 'right' }}>
-            <div style={{ fontSize: '1.5rem', fontWeight: 800, color: '#0f172a' }}>Application for Payment #{appNum}</div>
-          </div>
-        </div>
-
-        {/* INFO GRID — 3 columns */}
-        <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: 20, ...outerBorder }}>
-          <tbody>
-            <tr>
-              <td style={{ ...cellBorder, width: '36%', ...outerBorder }} rowSpan={3}>
-                <div style={labelStyle}>Submitted To:</div>
-                <div style={valStyle}>{client ? client.company : invoice.client}</div>
-                <div style={{ ...valStyle, fontSize: '0.75rem', color: '#475569' }}>{client ? client.address : ''}</div>
-              </td>
-              <td style={{ ...cellBorder, width: '36%', ...outerBorder }} rowSpan={3}>
-                <div style={labelStyle}>Contractor:</div>
-                <div style={valStyle}>Boulder Construction</div>
-                <div style={{ ...valStyle, fontSize: '0.75rem', color: '#475569' }}>123 Commerce Way</div>
-                <div style={{ ...valStyle, fontSize: '0.75rem', color: '#475569' }}>Newark, NJ 07102</div>
-              </td>
-              <td style={{ ...cellBorder, ...outerBorder }}>
-                <span style={labelStyle}>Period To: </span><span style={valStyle}>{formatDateShort(invoice.issueDate)}</span>
-              </td>
-            </tr>
-            <tr>
-              <td style={{ ...cellBorder, ...outerBorder }}>
-                <span style={labelStyle}>Payment Due: </span><span style={valStyle}>{formatDateShort(invoice.dueDate)}</span>
-              </td>
-            </tr>
-            <tr>
-              <td style={{ ...cellBorder, ...outerBorder }}>
-                <span style={labelStyle}>Contract Date: </span><span style={valStyle}>{getContractDate(invoice.issueDate)}</span>
-              </td>
-            </tr>
-            <tr>
-              <td style={{ ...cellBorder, ...outerBorder }}>
-                <span style={labelStyle}>Job: </span>
-              </td>
-              <td style={{ ...cellBorder, ...outerBorder }}>
-                <span style={valStyle}>{project ? project.name : invoice.project}</span>
-              </td>
-              <td style={{ ...cellBorder, ...outerBorder }}>
-                <span style={labelStyle}>Contract #: </span><span style={valStyle}>{appNum}</span>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-
-        {/* TWO-COLUMN SECTION: Lines 1-9 (left) + Certification (right) */}
-        <div style={{ display: 'flex', gap: 0, marginBottom: 20 }}>
-
-          {/* LEFT — Lines 1-9 */}
-          <div style={{ width: '55%', ...outerBorder, borderRight: 'none' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-              <tbody>
-                {[
-                  { num: '1.', label: 'ORIGINAL CONTRACT SUM:', val: formatCurrency(originalContractSum), bold: true },
-                  { num: '2.', label: 'Net Change by Change Orders:', val: formatCurrency(0) },
-                  { num: '3.', label: 'Contract Sum to Date (1+2):', val: formatCurrency(contractSumToDate) },
-                  { num: '4.', label: <>Total Completed and Stored To Date<br /><span style={{ fontSize: '0.7rem', color: '#666' }}>(Column G on Page 2):</span></>, val: formatCurrency(totalCompletedStored) },
-                  { num: '5.', label: 'Retainage:', val: '', sub: true },
-                  { num: '', label: <>&nbsp;&nbsp;a.&nbsp;&nbsp;2.5% of Completed Work:</>, val: formatCurrency(retainageCompleted), indent: true },
-                  { num: '', label: <>&nbsp;&nbsp;b.&nbsp;&nbsp;0% of Stored Materials:</>, val: formatCurrency(0), indent: true },
-                  { num: '6.', label: 'Total Earned Less Retainage (4-5):', val: formatCurrency(totalEarnedLessRetainage) },
-                  { num: '7.', label: 'LESS Previous Applications for Payment:', val: formatCurrency(Math.max(previousApplications, 0)) },
-                  { num: '8.', label: 'Current Payment Due:', val: formatCurrency(currentPaymentDue), highlight: true },
-                  { num: '9.', label: <>Balance to Finish, Including Retainage<br /><span style={{ fontSize: '0.7rem', color: '#666' }}>(3-6):</span></>, val: formatCurrency(balanceToFinish) },
-                ].map((row, i) => (
-                  <tr key={i} style={row.highlight ? { background: '#fffbeb' } : {}}>
-                    <td style={{
-                      padding: '5px 8px', fontSize: '0.78rem', color: '#1e293b',
-                      borderBottom: row.highlight ? '3px solid #d97706' : '1px solid #ddd',
-                      borderTop: row.highlight ? '3px solid #d97706' : 'none',
-                      fontWeight: row.bold || row.highlight ? 700 : 400, width: '70%',
-                    }}>
-                      {row.num && <span style={{ display: 'inline-block', width: 22, fontWeight: 600 }}>{row.num}</span>}
-                      {row.label}
-                    </td>
-                    <td style={{
-                      padding: '5px 8px', fontSize: '0.78rem', textAlign: 'right', color: '#0f172a',
-                      borderBottom: row.highlight ? '3px solid #d97706' : '1px solid #ddd',
-                      borderTop: row.highlight ? '3px solid #d97706' : 'none',
-                      fontWeight: row.bold || row.highlight ? 700 : 400,
-                    }}>
-                      {row.val}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-
-          {/* RIGHT — Certification */}
-          <div style={{ width: '45%', ...outerBorder, padding: '12px 14px', fontSize: '0.72rem', lineHeight: 1.5, color: '#334155' }}>
-            <p style={{ margin: '0 0 10px' }}>
-              The undersigned Contractor certifies that to the best of the Contractor's knowledge, information,
-              and belief, the Work covered by this Application for Payment has been completed in accordance with
-              the Contract Documents, that all amounts have been paid by the Contractor for Work for which previous
-              Applications for Payment were issued and payments received, and that current payment shown herein is now due.
-            </p>
-            <div style={{ marginBottom: 8 }}>
-              <span style={{ fontWeight: 600 }}>Contractor:</span> Boulder Construction
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-              <div><span style={{ fontWeight: 600 }}>By:</span> Mike Thornton</div>
-              <div><span style={{ fontWeight: 600 }}>Date:</span> {formatDateShort(invoice.issueDate)}</div>
-            </div>
-            <div style={{ borderBottom: '1px solid #000', marginBottom: 14 }}>&nbsp;</div>
-
-            <div style={{ fontSize: '0.7rem', color: '#475569', lineHeight: 1.6 }}>
-              <div style={{ marginBottom: 4 }}>State of ___________________ &nbsp; County of ___________________</div>
-              <div style={{ marginBottom: 4 }}>Subscribed and sworn to me this _____ day of _______________</div>
-              <div style={{ marginBottom: 4 }}>Notary Public: ___________________</div>
-              <div>My Commission Expires:</div>
+          {/* AIA G702 Document Header */}
+          <div style={{ borderBottom: '2px solid #000', paddingBottom: 8, marginBottom: 16, position: 'relative', zIndex: 1 }}>
+            <div style={{ fontSize: '0.8rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: '#0f172a' }}>
+              {invoice.isSubcontractorVersion 
+                ? 'APPLICATION AND CERTIFICATION FOR PAYMENT, CONTRACTOR-SUBCONTRACTOR VERSION'
+                : 'APPLICATION AND CERTIFICATION FOR PAYMENT'} 
+              <span style={{ float: 'right', fontSize: '0.75rem', fontStyle: 'italic' }}>AIA DOCUMENT G702</span>
             </div>
           </div>
-        </div>
 
-        {/* BOTTOM TWO-COLUMN: Change Order Summary + Certificate for Payment */}
-        <div style={{ display: 'flex', gap: 0 }}>
-
-          {/* LEFT — Change Order Summary */}
-          <div style={{ width: '45%', ...outerBorder, borderRight: 'none', padding: 0 }}>
-            <div style={{ background: '#f8fafc', padding: '6px 10px', borderBottom: '1px solid #999', fontWeight: 700, fontSize: '0.75rem', textTransform: 'uppercase' }}>
-              Change Order Summary
+          {/* TOP: Logo + Title + Distribution */}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 20, position: 'relative', zIndex: 1 }}>
+            <Logo />
+            <div style={{ textAlign: 'right' }}>
+              <div style={{ fontSize: '1.5rem', fontWeight: 800, color: '#0f172a' }}>Application for Payment #{invoice.applicationNo}</div>
+              {/* Distribution checkboxes */}
+              <div style={{ marginTop: 12, fontSize: '0.7rem', fontWeight: 600, textAlign: 'right' }}>
+                <div style={{ marginBottom: 3 }}>Distribution to:</div>
+                <div style={{ display: 'flex', gap: 16, justifyContent: 'flex-end', fontSize: '0.75rem' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <input type="checkbox" checked={invoice.distributionOwner} disabled style={{ width: 12, height: 12 }} />
+                    OWNER
+                  </label>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <input type="checkbox" checked={invoice.distributionArchitect} disabled style={{ width: 12, height: 12 }} />
+                    ARCHITECT
+                  </label>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <input type="checkbox" checked={invoice.distributionContractor} disabled style={{ width: 12, height: 12 }} />
+                    CONTRACTOR
+                  </label>
+                </div>
+              </div>
             </div>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.72rem' }}>
-              <thead>
+          </div>
+
+          {/* INFO GRID — 3 columns (with subcontractor field if applicable) */}
+          <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: 20, ...outerBorder }}>
+            <tbody>
+              <tr>
+                <td style={{ ...cellBorder, width: '36%', ...outerBorder }} rowSpan={invoice.isSubcontractorVersion ? 4 : 3}>
+                  <div style={labelStyle}>{invoice.isSubcontractorVersion ? 'To Owner/Contractor:' : 'Submitted To:'}</div>
+                  <div style={valStyle}>{ownerDisplay}</div>
+                  <div style={{ ...valStyle, fontSize: '0.75rem', color: '#475569' }}>{ownerAddressDisplay}</div>
+                </td>
+                <td style={{ ...cellBorder, width: '36%', ...outerBorder }} rowSpan={invoice.isSubcontractorVersion ? 3 : 2}>
+                  <div style={labelStyle}>{invoice.isSubcontractorVersion ? 'From Subcontractor:' : 'Contractor:'}</div>
+                  <div style={valStyle}>{invoice.isSubcontractorVersion ? invoice.subcontractor : 'Boulder Construction'}</div>
+                  <div style={{ ...valStyle, fontSize: '0.75rem', color: '#475569' }}>{invoice.isSubcontractorVersion ? '' : '123 Commerce Way'}</div>
+                  {!invoice.isSubcontractorVersion && <div style={{ ...valStyle, fontSize: '0.75rem', color: '#475569' }}>Newark, NJ 07102</div>}
+                </td>
+                <td style={{ ...cellBorder, ...outerBorder }}>
+                  <span style={labelStyle}>Period To: </span><span style={valStyle}>{formatDateShort(periodToDisplay)}</span>
+                </td>
+              </tr>
+              <tr>
+                <td style={{ ...cellBorder, ...outerBorder }}>
+                  <span style={labelStyle}>Payment Due: </span><span style={valStyle}>{formatDateShort(paymentDueDate)}</span>
+                </td>
+              </tr>
+              {invoice.isSubcontractorVersion && (
                 <tr>
-                  <th style={{ ...cellBorder, borderLeft: 'none', borderRight: 'none', textAlign: 'left', fontWeight: 600, fontSize: '0.68rem' }}>&nbsp;</th>
-                  <th style={{ ...cellBorder, borderLeft: 'none', borderRight: 'none', textAlign: 'right', fontWeight: 600, fontSize: '0.68rem' }}>Additions</th>
-                  <th style={{ ...cellBorder, borderLeft: 'none', borderRight: 'none', textAlign: 'right', fontWeight: 600, fontSize: '0.68rem' }}>Deductions</th>
+                  <td style={{ ...cellBorder, ...outerBorder }}>
+                    <span style={labelStyle}>App Type: </span><span style={{ ...valStyle, color: '#d97706', fontWeight: 600 }}>Subcontractor Application</span>
+                  </td>
+                </tr>
+              )}
+              <tr>
+                <td style={{ ...cellBorder, ...outerBorder }}>
+                  <div style={labelStyle}>Job:</div>
+                  <div style={valStyle}>{projectNameDisplay}</div>
+                </td>
+                <td style={{ ...cellBorder, ...outerBorder }}>
+                  <span style={labelStyle}>Contract Date: </span><span style={valStyle}>{formatDateShort(contractDateDisplay)}</span>
+                </td>
+              </tr>
+              <tr>
+                <td style={{ ...cellBorder, ...outerBorder }}>&nbsp;</td>
+                <td style={{ ...cellBorder, ...outerBorder }}>&nbsp;</td>
+                <td style={{ ...cellBorder, ...outerBorder }}>
+                  <span style={labelStyle}>Contract #: </span><span style={valStyle}>{invoice.applicationNo}</span>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+
+          {/* TWO-COLUMN SECTION: Lines 1-9 (left) + Certification/Signature (right) */}
+          <div style={{ display: 'flex', gap: 0, marginBottom: 20 }}>
+
+            {/* LEFT — Lines 1-9 */}
+            <div style={{ width: '55%', ...outerBorder, borderRight: 'none' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                <tbody>
+                  {[
+                    { num: '1.', label: 'ORIGINAL CONTRACT SUM:', val: formatCurrency(invoice.originalContractSum), bold: true },
+                    { num: '2.', label: 'Net Change by Change Orders:', val: formatCurrency(invoice.netChangeOrders) },
+                    { num: '3.', label: 'Contract Sum to Date (1+2):', val: formatCurrency(invoice.contractSumToDate) },
+                    { num: '4.', label: 'Total Completed and Stored To Date', note: '(Column G on G703)', val: formatCurrency(invoice.totalCompletedAndStored) },
+                    { num: '5.', label: 'Retainage:', val: '', sub: true },
+                    { num: '', label: '  a.  ___% of Completed Work  $', note: '(Column D + E on G703)', val: '_________', indent: true, blank: true },
+                    { num: '', label: '  b.  ___% of Stored Materials  $', note: '(Column F on G703)', val: '_________', indent: true, blank: true },
+                    { num: '', label: '           Total Retainage (Lines 5a + 5b or', note: '(Total in Column I of G703)', val: formatCurrency(invoice.totalRetainage), indent: true },
+                    { num: '6.', label: 'TOTAL EARNED LESS RETAINAGE (Line 4 Less Line 5 Total):', val: formatCurrency(invoice.totalEarnedLessRetainage) },
+                    { num: '7.', label: 'LESS Previous Applications for Payment:', note: '(Line 6 from prior Certificate)', val: formatCurrency(invoice.lessPreviousCertificates) },
+                    { num: '8.', label: 'Current Payment Due:', val: formatCurrency(invoice.currentPaymentDue), highlight: true },
+                    { num: '9.', label: 'Balance to Finish, Including Retainage (3-6):', val: formatCurrency(invoice.balanceToFinish) },
+                  ].map((row, i) => (
+                    <tr key={i} style={row.highlight ? { background: '#fef3c7' } : {}}>
+                      <td style={{
+                        padding: '5px 8px', fontSize: '0.78rem', color: '#1e293b',
+                        borderBottom: row.highlight ? '3px solid #d97706' : '1px solid #ddd',
+                        borderTop: row.highlight ? '3px solid #d97706' : 'none',
+                        fontWeight: row.bold || row.highlight ? 700 : 400, width: '70%',
+                      }}>
+                        {row.num && <span style={{ display: 'inline-block', width: 22, fontWeight: 600 }}>{row.num}</span>}
+                        {row.label}
+                        {row.note && <div style={{ fontSize: '0.7rem', color: '#64748b', fontStyle: 'italic', fontWeight: 400, marginTop: 2 }}>{row.note}</div>}
+                      </td>
+                      <td style={{
+                        padding: '5px 8px', fontSize: '0.78rem', textAlign: 'right', color: '#0f172a',
+                        borderBottom: row.highlight ? '3px solid #d97706' : '1px solid #ddd',
+                        borderTop: row.highlight ? '3px solid #d97706' : 'none',
+                        fontWeight: row.bold || row.highlight ? 700 : 400,
+                        background: row.highlight ? '#fef3c7' : 'transparent',
+                      }}>
+                        {row.val}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {/* RIGHT — Certification Text + Signature Block */}
+            <div style={{ width: '45%', ...outerBorder, padding: '12px 14px', fontSize: '0.75rem', lineHeight: 1.5, color: '#334155' }}>
+              
+              {/* Certification paragraph */}
+              {invoice.isSubcontractorVersion ? (
+                <div style={{ marginBottom: 12 }}>
+                  <p style={{ margin: '0 0 8px' }}>
+                    The undersigned Subcontractor certifies that to the best of the Subcontractor's knowledge, information, and belief the Work covered by this Application for Payment has been completed in accordance with the Contract Documents, that all amounts have been paid by the Subcontractor for Work for which previous Certificates for Payment were issued and payments received from the Owner/Contractor, and that current payment shown herein is now due.
+                  </p>
+                  <p style={{ margin: 0, fontStyle: 'italic', fontSize: '0.72rem' }}>
+                    Application is made for payment, as shown below, in connection with the Subcontract. Continuation Sheet, AIA Document G703S, is attached.
+                  </p>
+                </div>
+              ) : (
+                <p style={{ margin: '0 0 12px' }}>
+                  The undersigned Contractor certifies that to the best of the Contractor's knowledge, information, and belief, the Work covered by this Application for Payment has been completed in accordance with the Contract Documents, that all amounts have been paid by the Contractor for Work for which previous Applications for Payment were issued and payments received, and that current payment shown herein is now due.
+                </p>
+              )}
+
+              {/* Subcontractor section */}
+              <div style={{ borderTop: '1px solid #ddd', paddingTop: 8, marginBottom: 8 }}>
+                <div style={{ fontWeight: 700, marginBottom: 4 }}>SUBCONTRACTOR:</div>
+                <div style={{ marginBottom: 8, fontSize: '0.72rem' }}>{invoice.isSubcontractorVersion ? invoice.subcontractor : 'N/A'}</div>
+                
+                {/* By/Date */}
+                <div style={{ marginBottom: 8, fontSize: '0.72rem' }}>
+                  <div style={{ marginBottom: 4 }}><span style={{ fontWeight: 600 }}>By:</span> ______________</div>
+                  <div><span style={{ fontWeight: 600 }}>Date:</span> ______________</div>
+                </div>
+                
+                {/* Notary */}
+                <div style={{ fontSize: '0.7rem' }}>
+                  <div style={{ marginBottom: 4 }}>State of: ______________</div>
+                  <div style={{ marginBottom: 4 }}>County of: ______________</div>
+                  <div style={{ marginBottom: 4 }}>Subscribed and sworn to before me this _____ day of ______________</div>
+                  <div style={{ marginBottom: 4 }}>Notary Public: ______________</div>
+                  <div>My Commission Expires: ______________</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* BOTTOM TWO-COLUMN: Change Order Summary + Certificate for Payment */}
+          <div style={{ display: 'flex', gap: 0 }}>
+
+            {/* LEFT — Change Order Summary (AIA G702 Format) */}
+            <div style={{ width: '45%', ...outerBorder, borderRight: 'none', padding: 0 }}>
+              <div style={{ background: '#f8fafc', padding: '6px 10px', borderBottom: '1px solid #999', fontWeight: 700, fontSize: '0.75rem', textTransform: 'uppercase' }}>
+                Change Order Summary
+              </div>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.72rem' }}>
+                <thead>
+                  <tr>
+                    <th style={{ ...cellBorder, borderLeft: 'none', borderRight: 'none', textAlign: 'left', fontWeight: 600, fontSize: '0.68rem' }}>&nbsp;</th>
+                    <th style={{ ...cellBorder, borderLeft: 'none', borderRight: 'none', textAlign: 'right', fontWeight: 600, fontSize: '0.68rem' }}>Additions</th>
+                    <th style={{ ...cellBorder, borderLeft: 'none', borderRight: 'none', textAlign: 'right', fontWeight: 600, fontSize: '0.68rem' }}>Deductions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td style={{ padding: '4px 10px', borderBottom: '1px solid #ddd' }}>Total changes approved in previous months by Owner</td>
+                    <td style={{ padding: '4px 10px', borderBottom: '1px solid #ddd', textAlign: 'right', color: '#d97706', fontWeight: 600 }}>{formatCurrency(invoice.coPreviousAdditions)}</td>
+                    <td style={{ padding: '4px 10px', borderBottom: '1px solid #ddd', textAlign: 'right', color: '#d97706', fontWeight: 600 }}>{formatCurrency(invoice.coPreviousDeductions)}</td>
+                  </tr>
+                  <tr>
+                    <td style={{ padding: '4px 10px', borderBottom: '1px solid #ddd' }}>Total approved this Month</td>
+                    <td style={{ padding: '4px 10px', borderBottom: '1px solid #ddd', textAlign: 'right', color: '#d97706', fontWeight: 600 }}>{formatCurrency(invoice.coThisMonthAdditions)}</td>
+                    <td style={{ padding: '4px 10px', borderBottom: '1px solid #ddd', textAlign: 'right', color: '#d97706', fontWeight: 600 }}>{formatCurrency(invoice.coThisMonthDeductions)}</td>
+                  </tr>
+                  <tr style={{ fontWeight: 600, background: '#fafafa' }}>
+                    <td style={{ padding: '4px 10px', borderBottom: '1px solid #999' }}>TOTALS</td>
+                    <td style={{ padding: '4px 10px', borderBottom: '1px solid #999', textAlign: 'right' }}>{formatCurrency(coTotalAdditions)}</td>
+                    <td style={{ padding: '4px 10px', borderBottom: '1px solid #999', textAlign: 'right' }}>{formatCurrency(coTotalDeductions)}</td>
+                  </tr>
+                </tbody>
+              </table>
+              <div style={{ padding: '6px 10px', fontSize: '0.72rem', fontWeight: 600 }}>
+                NET CHANGES by Change Order: <span style={{ float: 'right', color: coNetChanges >= 0 ? '#047857' : '#b91c1c' }}>{formatCurrency(coNetChanges)}</span>
+              </div>
+            </div>
+
+            {/* RIGHT — Certificate for Payment */}
+            <div style={{ width: '55%', ...outerBorder, padding: 0 }}>
+              <div style={{ background: '#f8fafc', padding: '6px 10px', borderBottom: '1px solid #999', fontWeight: 700, fontSize: '0.75rem', textTransform: 'uppercase' }}>
+                Certificate for Payment
+              </div>
+              <div style={{ padding: '10px 14px', fontSize: '0.7rem', lineHeight: 1.55, color: '#334155' }}>
+                <p style={{ margin: '0 0 10px' }}>
+                  In accordance with the Contract Documents, based on on-site observations and the data
+                  comprising the above application, the Construction Manager certifies that to the best of his
+                  knowledge, information, and belief the Work has progressed as indicated, the quality of the
+                  Work is in accordance with the Contract Documents, and the Contractor is entitled to
+                  payment of the AMOUNT CERTIFIED.
+                </p>
+                <div style={{ marginBottom: 12, fontWeight: 600 }}>
+                  Amount Certified: $___________________
+                </div>
+                <div style={{ marginBottom: 10 }}>
+                  <div style={{ fontWeight: 600, marginBottom: 2 }}>Construction Manager:</div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span>By:_________________________</span>
+                    <span>Date: _______________</span>
+                  </div>
+                </div>
+                <div>
+                  <div style={{ fontWeight: 600, marginBottom: 2 }}>Architect:</div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span>By:_________________________</span>
+                    <span>Date: _______________</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ================================================================
+          TAB 2: G703 — CONTINUATION SHEET
+          ================================================================ */}
+      {activeTab === 'g703' && (
+        <div id="invoice-g703-content" style={{ ...pageStyle, pageBreakBefore: 'always' }}>
+
+          {/* AIA G703 Document Header */}
+          <div style={{ borderBottom: '2px solid #000', paddingBottom: 8, marginBottom: 16 }}>
+            <div style={{ fontSize: '0.8rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: '#0f172a' }}>
+              CONTINUATION SHEET
+              <span style={{ float: 'right', fontSize: '0.75rem', fontStyle: 'italic' }}>AIA DOCUMENT G703</span>
+            </div>
+          </div>
+
+          {/* TOP: Logo + Title */}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10 }}>
+            <Logo />
+            <div style={{ textAlign: 'right' }}>
+              <div style={{ fontSize: '1.25rem', fontWeight: 800, color: '#0f172a' }}>Application for Payment #{invoice.applicationNo}</div>
+            </div>
+          </div>
+
+          {/* CONTINUATION TABLE */}
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', ...outerBorder, fontSize: '0.72rem' }}>
+              <thead>
+                <tr style={{ background: '#f1f5f9' }}>
+                  <th style={{ ...cellBorderBold, textAlign: 'center', width: '4%' }}>A</th>
+                  <th style={{ ...cellBorderBold, textAlign: 'center', width: '22%' }}>B</th>
+                  <th style={{ ...cellBorderBold, textAlign: 'center', width: '11%' }}>C</th>
+                  <th style={{ ...cellBorderBold, textAlign: 'center', width: '11%' }}>D</th>
+                  <th style={{ ...cellBorderBold, textAlign: 'center', width: '11%' }}>E</th>
+                  <th style={{ ...cellBorderBold, textAlign: 'center', width: '9%' }}>F</th>
+                  <th style={{ ...cellBorderBold, textAlign: 'center', width: '11%' }}>G</th>
+                  <th style={{ ...cellBorderBold, textAlign: 'center', width: '5%' }}>%</th>
+                  <th style={{ ...cellBorderBold, textAlign: 'center', width: '10%' }}>H</th>
+                  <th style={{ ...cellBorderBold, textAlign: 'center', width: '9%' }}>I</th>
+                </tr>
+                <tr style={{ background: '#f8fafc' }}>
+                  <th style={{ ...cellBorder, textAlign: 'center', fontWeight: 600, fontSize: '0.65rem' }}>Item</th>
+                  <th style={{ ...cellBorder, textAlign: 'center', fontWeight: 600, fontSize: '0.65rem' }}>Description of Work</th>
+                  <th style={{ ...cellBorder, textAlign: 'center', fontWeight: 600, fontSize: '0.65rem' }}>Scheduled Value</th>
+                  <th style={{ ...cellBorder, textAlign: 'center', fontWeight: 600, fontSize: '0.65rem' }}>Work Completed Previously</th>
+                  <th style={{ ...cellBorder, textAlign: 'center', fontWeight: 600, fontSize: '0.65rem' }}>This Period</th>
+                  <th style={{ ...cellBorder, textAlign: 'center', fontWeight: 600, fontSize: '0.65rem' }}>Materials Stored</th>
+                  <th style={{ ...cellBorder, textAlign: 'center', fontWeight: 600, fontSize: '0.65rem' }}>Total Completed & Stored</th>
+                  <th style={{ ...cellBorder, textAlign: 'center', fontWeight: 600, fontSize: '0.65rem' }}>%</th>
+                  <th style={{ ...cellBorder, textAlign: 'center', fontWeight: 600, fontSize: '0.65rem' }}>Balance to Finish</th>
+                  <th style={{ ...cellBorder, textAlign: 'center', fontWeight: 600, fontSize: '0.65rem' }}>Retainage</th>
                 </tr>
               </thead>
               <tbody>
-                <tr>
-                  <td style={{ padding: '4px 10px', borderBottom: '1px solid #ddd' }}>Changes Approved in Previous Periods:</td>
-                  <td style={{ padding: '4px 10px', borderBottom: '1px solid #ddd', textAlign: 'right' }}>$0.00</td>
-                  <td style={{ padding: '4px 10px', borderBottom: '1px solid #ddd', textAlign: 'right' }}>$0.00</td>
-                </tr>
-                <tr>
-                  <td style={{ padding: '4px 10px', borderBottom: '1px solid #ddd' }}>Changes Approved This Period:</td>
-                  <td style={{ padding: '4px 10px', borderBottom: '1px solid #ddd', textAlign: 'right' }}>$0.00</td>
-                  <td style={{ padding: '4px 10px', borderBottom: '1px solid #ddd', textAlign: 'right' }}>$0.00</td>
-                </tr>
-                <tr style={{ fontWeight: 600 }}>
-                  <td style={{ padding: '4px 10px', borderBottom: '1px solid #999' }}>Totals:</td>
-                  <td style={{ padding: '4px 10px', borderBottom: '1px solid #999', textAlign: 'right' }}>$0.00</td>
-                  <td style={{ padding: '4px 10px', borderBottom: '1px solid #999', textAlign: 'right' }}>$0.00</td>
+                {/* Base contract items */}
+                {baseItems.map((li, idx) => (
+                  <tr key={`base-${idx}`}>
+                    <td style={{ ...cellBorder, textAlign: 'center' }}>{li.itemNo || idx + 1}</td>
+                    <td style={cellBorder}>{li.description}</td>
+                    <td style={{ ...cellBorder, textAlign: 'right' }}>{formatCurrency(li.scheduledValue)}</td>
+                    <td style={{ ...cellBorder, textAlign: 'right' }}>{formatCurrency(li.previousApplication)}</td>
+                    <td style={{ ...cellBorder, textAlign: 'right' }}>{formatCurrency(li.thisPeriod)}</td>
+                    <td style={{ ...cellBorder, textAlign: 'right' }}>{formatCurrency(li.materialsStored)}</td>
+                    <td style={{ ...cellBorder, textAlign: 'right' }}>{formatCurrency(li.totalCompleted)}</td>
+                    <td style={{ ...cellBorder, textAlign: 'center' }}>{li.percentComplete.toFixed(1)}%</td>
+                    <td style={{ ...cellBorder, textAlign: 'right' }}>{formatCurrency(li.balanceToFinish)}</td>
+                    <td style={{ ...cellBorder, textAlign: 'right' }}>{formatCurrency(li.retainage)}</td>
+                  </tr>
+                ))}
+
+                {/* Change Orders separator + items */}
+                {coItems.length > 0 && (
+                  <tr style={{ background: '#f8fafc' }}>
+                    <td colSpan={10} style={{ ...cellBorder, fontWeight: 700, fontStyle: 'italic', color: '#64748b', textAlign: 'center', fontSize: '0.75rem' }}>
+                      Change Orders
+                    </td>
+                  </tr>
+                )}
+                {coItems.map((li, idx) => (
+                  <tr key={`co-${idx}`}>
+                    <td style={{ ...cellBorder, textAlign: 'center' }}>{li.itemNo || baseItems.length + idx + 1}</td>
+                    <td style={cellBorder}>{li.description}</td>
+                    <td style={{ ...cellBorder, textAlign: 'right' }}>{formatCurrency(li.scheduledValue)}</td>
+                    <td style={{ ...cellBorder, textAlign: 'right' }}>{formatCurrency(li.previousApplication)}</td>
+                    <td style={{ ...cellBorder, textAlign: 'right' }}>{formatCurrency(li.thisPeriod)}</td>
+                    <td style={{ ...cellBorder, textAlign: 'right' }}>{formatCurrency(li.materialsStored)}</td>
+                    <td style={{ ...cellBorder, textAlign: 'right' }}>{formatCurrency(li.totalCompleted)}</td>
+                    <td style={{ ...cellBorder, textAlign: 'center' }}>{li.percentComplete.toFixed(1)}%</td>
+                    <td style={{ ...cellBorder, textAlign: 'right' }}>{formatCurrency(li.balanceToFinish)}</td>
+                    <td style={{ ...cellBorder, textAlign: 'right' }}>{formatCurrency(li.retainage)}</td>
+                  </tr>
+                ))}
+
+                {/* GRAND TOTALS */}
+                <tr style={{ background: '#f8fafc', fontWeight: 700 }}>
+                  <td style={{ ...cellBorderBold, textAlign: 'center' }} colSpan={2}>GRAND TOTALS</td>
+                  <td style={{ ...cellBorderBold, textAlign: 'right' }}>{formatCurrency(gtScheduled)}</td>
+                  <td style={{ ...cellBorderBold, textAlign: 'right' }}>{formatCurrency(gtPrevious)}</td>
+                  <td style={{ ...cellBorderBold, textAlign: 'right' }}>{formatCurrency(gtThisPeriod)}</td>
+                  <td style={{ ...cellBorderBold, textAlign: 'right' }}>{formatCurrency(gtMaterials)}</td>
+                  <td style={{ ...cellBorderBold, textAlign: 'right' }}>{formatCurrency(gtTotalCompleted)}</td>
+                  <td style={{ ...cellBorderBold, textAlign: 'center' }}>{gtPercent.toFixed(1)}%</td>
+                  <td style={{ ...cellBorderBold, textAlign: 'right' }}>{formatCurrency(gtBalance)}</td>
+                  <td style={{ ...cellBorderBold, textAlign: 'right' }}>{formatCurrency(gtRetainage)}</td>
                 </tr>
               </tbody>
             </table>
-            <div style={{ padding: '6px 10px', fontSize: '0.72rem', fontWeight: 600 }}>
-              Net Changes by Change Order: <span style={{ float: 'right' }}>$0.00</span>
+          </div>
+        </div>
+      )}
+
+      {/* ================================================================
+          TAB 3: BACKUP — PAYMENT HISTORY
+          ================================================================ */}
+      {activeTab === 'backup' && hasBackup && (
+        <div id="invoice-backup-content" style={pageStyle}>
+
+          {/* TOP: Logo + Title */}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10 }}>
+            <Logo />
+            <div style={{ textAlign: 'right' }}>
+              <div style={{ fontSize: '1.25rem', fontWeight: 800, color: '#0f172a' }}>Application for Payment #{invoice.applicationNo}</div>
             </div>
           </div>
 
-          {/* RIGHT — Certificate for Payment */}
-          <div style={{ width: '55%', ...outerBorder, padding: 0 }}>
-            <div style={{ background: '#f8fafc', padding: '6px 10px', borderBottom: '1px solid #999', fontWeight: 700, fontSize: '0.75rem', textTransform: 'uppercase' }}>
-              Certificate for Payment
-            </div>
-            <div style={{ padding: '10px 14px', fontSize: '0.7rem', lineHeight: 1.55, color: '#334155' }}>
-              <p style={{ margin: '0 0 10px' }}>
-                In accordance with the Contract Documents, based on on-site observations and the data
-                comprising the above application, the Construction Manager certifies that to the best of his
-                knowledge, information, and belief the Work has progressed as indicated, the quality of the
-                Work is in accordance with the Contract Documents, and the Contractor is entitled to
-                payment of the AMOUNT CERTIFIED.
-              </p>
-              <div style={{ marginBottom: 12, fontWeight: 600 }}>
-                Amount Certified: $___________________
-              </div>
-              <div style={{ marginBottom: 10 }}>
-                <div style={{ fontWeight: 600, marginBottom: 2 }}>Construction Manager:</div>
-                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span>By:_________________________</span>
-                  <span>Date: _______________</span>
-                </div>
-              </div>
-              <div>
-                <div style={{ fontWeight: 600, marginBottom: 2 }}>Architect:</div>
-                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span>By:_________________________</span>
-                  <span>Date: _______________</span>
-                </div>
-              </div>
-            </div>
+          <div style={{ textAlign: 'center', margin: '10px 0 20px', fontSize: '1.1rem', fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#0f172a' }}>
+            Backup &mdash; Payment History
           </div>
+
+          {(() => {
+            const draws = invoice.backupDrawHistory;
+            const currentDrawNo = invoice.applicationNo;
+            const priorDraws = draws.filter(d => d.draw < currentDrawNo);
+            const currentDraws = draws.filter(d => d.draw === currentDrawNo);
+
+            const backupTableHead = (
+              <thead>
+                <tr style={{ background: '#f1f5f9' }}>
+                  <th style={{ ...cellBorderBold, textAlign: 'center', width: '6%' }}>Draw #</th>
+                  <th style={{ ...cellBorderBold, textAlign: 'center', width: '6%' }}>G703 #</th>
+                  <th style={{ ...cellBorderBold, textAlign: 'left', width: '28%' }}>Description</th>
+                  <th style={{ ...cellBorderBold, textAlign: 'left', width: '20%' }}>Commentary</th>
+                  <th style={{ ...cellBorderBold, textAlign: 'right', width: '14%' }}>Amount</th>
+                  <th style={{ ...cellBorderBold, textAlign: 'right', width: '12%' }}>Retainage</th>
+                  <th style={{ ...cellBorderBold, textAlign: 'right', width: '14%' }}>Net Amount</th>
+                </tr>
+              </thead>
+            );
+
+            const renderDrawItems = (drawList) => {
+              const rows = [];
+              drawList.forEach((draw) => {
+                draw.items.forEach((item, itemIdx) => {
+                  rows.push(
+                    <tr key={`${draw.draw}-${itemIdx}`}>
+                      {itemIdx === 0 ? (
+                        <td style={{ ...cellBorder, textAlign: 'center', fontWeight: 600 }} rowSpan={draw.items.length}>
+                          {draw.draw}
+                        </td>
+                      ) : null}
+                      <td style={{ ...cellBorder, textAlign: 'center' }}>{item.g703No}</td>
+                      <td style={cellBorder}>{item.description}</td>
+                      <td style={{ ...cellBorder, color: '#64748b', fontSize: '0.72rem' }}>{item.commentary}</td>
+                      <td style={{ ...cellBorder, textAlign: 'right' }}>{formatCurrency(item.amount)}</td>
+                      <td style={{ ...cellBorder, textAlign: 'right' }}>{formatCurrency(item.retainage)}</td>
+                      <td style={{ ...cellBorder, textAlign: 'right' }}>{formatCurrency(item.netAmount)}</td>
+                    </tr>
+                  );
+                });
+              });
+              return rows;
+            };
+
+            const calcTotals = (drawList) => {
+              let totalAmount = 0, totalRetainage = 0, totalNet = 0;
+              drawList.forEach(d => d.items.forEach(item => {
+                totalAmount += parseFloat(item.amount) || 0;
+                totalRetainage += parseFloat(item.retainage) || 0;
+                totalNet += parseFloat(item.netAmount) || 0;
+              }));
+              return { totalAmount, totalRetainage, totalNet };
+            };
+
+            const priorTotals = calcTotals(priorDraws);
+            const currentTotals = calcTotals(currentDraws);
+
+            return (
+              <>
+                {/* Prior Payments */}
+                {priorDraws.length > 0 && (
+                  <div style={{ marginBottom: 24 }}>
+                    <div style={{ fontSize: '0.9rem', fontWeight: 700, marginBottom: 8, color: '#0f172a', borderBottom: '2px solid #f59e0b', paddingBottom: 4, display: 'inline-block' }}>
+                      Prior Payments
+                    </div>
+                    <div style={{ overflowX: 'auto' }}>
+                      <table style={{ width: '100%', borderCollapse: 'collapse', ...outerBorder, fontSize: '0.72rem' }}>
+                        {backupTableHead}
+                        <tbody>
+                          {renderDrawItems(priorDraws)}
+                          <tr style={{ background: '#f8fafc', fontWeight: 700 }}>
+                            <td colSpan={4} style={{ ...cellBorderBold, textAlign: 'right' }}>Prior Payments Total:</td>
+                            <td style={{ ...cellBorderBold, textAlign: 'right' }}>{formatCurrency(priorTotals.totalAmount)}</td>
+                            <td style={{ ...cellBorderBold, textAlign: 'right' }}>{formatCurrency(priorTotals.totalRetainage)}</td>
+                            <td style={{ ...cellBorderBold, textAlign: 'right' }}>{formatCurrency(priorTotals.totalNet)}</td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+
+                {/* New Payment Requests (Current Draw) */}
+                {currentDraws.length > 0 && (
+                  <div>
+                    <div style={{ fontSize: '0.9rem', fontWeight: 700, marginBottom: 8, color: '#0f172a', borderBottom: '2px solid #f59e0b', paddingBottom: 4, display: 'inline-block' }}>
+                      New Payment Requests (Draw #{currentDrawNo})
+                    </div>
+                    <div style={{ overflowX: 'auto' }}>
+                      <table style={{ width: '100%', borderCollapse: 'collapse', ...outerBorder, fontSize: '0.72rem' }}>
+                        {backupTableHead}
+                        <tbody>
+                          {renderDrawItems(currentDraws)}
+                          <tr style={{ background: '#fef3c7', fontWeight: 700 }}>
+                            <td colSpan={4} style={{ ...cellBorderBold, textAlign: 'right' }}>Current Draw Total:</td>
+                            <td style={{ ...cellBorderBold, textAlign: 'right' }}>{formatCurrency(currentTotals.totalAmount)}</td>
+                            <td style={{ ...cellBorderBold, textAlign: 'right' }}>{formatCurrency(currentTotals.totalRetainage)}</td>
+                            <td style={{ ...cellBorderBold, textAlign: 'right' }}>{formatCurrency(currentTotals.totalNet)}</td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+              </>
+            );
+          })()}
         </div>
-      </div>
+      )}
 
-      {/* ==================================================================
-          PAGE 2 — CONTINUATION SHEET
-          ================================================================== */}
-      <div style={{ ...pageStyle, pageBreakBefore: 'always' }}>
-
-        {/* TOP: Logo + Title */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10 }}>
-          <Logo />
-          <div style={{ textAlign: 'right' }}>
-            <div style={{ fontSize: '1.25rem', fontWeight: 800, color: '#0f172a' }}>Application for Payment #{appNum}</div>
-          </div>
-        </div>
-
-        <div style={{ textAlign: 'center', margin: '10px 0 20px', fontSize: '1.1rem', fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#0f172a' }}>
-          Continuation Sheet
-        </div>
-
-        {/* CONTINUATION TABLE */}
-        <div style={{ overflowX: 'auto' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', ...outerBorder, fontSize: '0.72rem' }}>
-            <thead>
-              <tr style={{ background: '#f1f5f9' }}>
-                <th style={{ ...cellBorderBold, textAlign: 'center', width: '4%' }}>A</th>
-                <th style={{ ...cellBorderBold, textAlign: 'center', width: '22%' }}>B</th>
-                <th style={{ ...cellBorderBold, textAlign: 'center', width: '11%' }}>C</th>
-                <th style={{ ...cellBorderBold, textAlign: 'center', width: '11%' }} colSpan={1}>D</th>
-                <th style={{ ...cellBorderBold, textAlign: 'center', width: '11%' }}>E</th>
-                <th style={{ ...cellBorderBold, textAlign: 'center', width: '9%' }}>F</th>
-                <th style={{ ...cellBorderBold, textAlign: 'center', width: '11%' }}>G</th>
-                <th style={{ ...cellBorderBold, textAlign: 'center', width: '5%' }}>%</th>
-                <th style={{ ...cellBorderBold, textAlign: 'center', width: '10%' }}>H</th>
-                <th style={{ ...cellBorderBold, textAlign: 'center', width: '9%' }}>I</th>
-              </tr>
-              <tr style={{ background: '#f8fafc' }}>
-                <th style={{ ...cellBorder, textAlign: 'center', fontWeight: 600, fontSize: '0.65rem' }}>Item</th>
-                <th style={{ ...cellBorder, textAlign: 'center', fontWeight: 600, fontSize: '0.65rem' }}>Description of Work</th>
-                <th style={{ ...cellBorder, textAlign: 'center', fontWeight: 600, fontSize: '0.65rem' }}>Scheduled Value</th>
-                <th style={{ ...cellBorder, textAlign: 'center', fontWeight: 600, fontSize: '0.65rem' }}>Work Completed Previously</th>
-                <th style={{ ...cellBorder, textAlign: 'center', fontWeight: 600, fontSize: '0.65rem' }}>This Period</th>
-                <th style={{ ...cellBorder, textAlign: 'center', fontWeight: 600, fontSize: '0.65rem' }}>Materials Stored</th>
-                <th style={{ ...cellBorder, textAlign: 'center', fontWeight: 600, fontSize: '0.65rem' }}>Total Completed & Stored</th>
-                <th style={{ ...cellBorder, textAlign: 'center', fontWeight: 600, fontSize: '0.65rem' }}>%</th>
-                <th style={{ ...cellBorder, textAlign: 'center', fontWeight: 600, fontSize: '0.65rem' }}>Balance to Finish</th>
-                <th style={{ ...cellBorder, textAlign: 'center', fontWeight: 600, fontSize: '0.65rem' }}>Retainage</th>
-              </tr>
-            </thead>
-            <tbody>
-              {invoice.lineItems.map((item, idx) => {
-                const scheduledValue = item.total;
-                const thisPeriod = item.total;
-                const previously = 0;
-                const materialsStored = 0;
-                const totalCompleted = previously + thisPeriod + materialsStored;
-                const pct = scheduledValue > 0 ? ((totalCompleted / scheduledValue) * 100) : 0;
-                const balFinish = scheduledValue - totalCompleted;
-                const retainage = totalCompleted * retainageRate;
-                return (
-                  <tr key={idx}>
-                    <td style={{ ...cellBorder, textAlign: 'center' }}>{idx + 1}</td>
-                    <td style={{ ...cellBorder }}>{item.description}</td>
-                    <td style={{ ...cellBorder, textAlign: 'right' }}>{formatCurrency(scheduledValue)}</td>
-                    <td style={{ ...cellBorder, textAlign: 'right' }}>{formatCurrency(previously)}</td>
-                    <td style={{ ...cellBorder, textAlign: 'right' }}>{formatCurrency(thisPeriod)}</td>
-                    <td style={{ ...cellBorder, textAlign: 'right' }}>{formatCurrency(materialsStored)}</td>
-                    <td style={{ ...cellBorder, textAlign: 'right' }}>{formatCurrency(totalCompleted)}</td>
-                    <td style={{ ...cellBorder, textAlign: 'center' }}>{pct.toFixed(2)}%</td>
-                    <td style={{ ...cellBorder, textAlign: 'right' }}>{formatCurrency(balFinish)}</td>
-                    <td style={{ ...cellBorder, textAlign: 'right' }}>{formatCurrency(retainage)}</td>
-                  </tr>
-                );
-              })}
-
-              {/* Change Orders row */}
-              <tr>
-                <td style={{ ...cellBorder, textAlign: 'center', fontWeight: 600, fontStyle: 'italic', color: '#64748b' }} colSpan={2}>
-                  Change Orders
-                </td>
-                <td style={{ ...cellBorder, textAlign: 'right', color: '#64748b' }}>$0.00</td>
-                <td style={{ ...cellBorder, textAlign: 'right', color: '#64748b' }}>$0.00</td>
-                <td style={{ ...cellBorder, textAlign: 'right', color: '#64748b' }}>$0.00</td>
-                <td style={{ ...cellBorder, textAlign: 'right', color: '#64748b' }}>$0.00</td>
-                <td style={{ ...cellBorder, textAlign: 'right', color: '#64748b' }}>$0.00</td>
-                <td style={{ ...cellBorder, textAlign: 'center', color: '#64748b' }}>—</td>
-                <td style={{ ...cellBorder, textAlign: 'right', color: '#64748b' }}>$0.00</td>
-                <td style={{ ...cellBorder, textAlign: 'right', color: '#64748b' }}>$0.00</td>
-              </tr>
-
-              {/* GRAND TOTALS */}
-              {(() => {
-                const gtScheduled = invoice.lineItems.reduce((s, li) => s + li.total, 0);
-                const gtThisPeriod = gtScheduled;
-                const gtPreviously = 0;
-                const gtMaterials = 0;
-                const gtTotalCompleted = gtPreviously + gtThisPeriod + gtMaterials;
-                const gtPct = gtScheduled > 0 ? ((gtTotalCompleted / gtScheduled) * 100) : 0;
-                const gtBalance = gtScheduled - gtTotalCompleted;
-                const gtRetainage = gtTotalCompleted * retainageRate;
-                return (
-                  <tr style={{ background: '#f8fafc', fontWeight: 700 }}>
-                    <td style={{ ...cellBorderBold, textAlign: 'center' }} colSpan={2}>GRAND TOTALS</td>
-                    <td style={{ ...cellBorderBold, textAlign: 'right' }}>{formatCurrency(gtScheduled)}</td>
-                    <td style={{ ...cellBorderBold, textAlign: 'right' }}>{formatCurrency(gtPreviously)}</td>
-                    <td style={{ ...cellBorderBold, textAlign: 'right' }}>{formatCurrency(gtThisPeriod)}</td>
-                    <td style={{ ...cellBorderBold, textAlign: 'right' }}>{formatCurrency(gtMaterials)}</td>
-                    <td style={{ ...cellBorderBold, textAlign: 'right' }}>{formatCurrency(gtTotalCompleted)}</td>
-                    <td style={{ ...cellBorderBold, textAlign: 'center' }}>{gtPct.toFixed(2)}%</td>
-                    <td style={{ ...cellBorderBold, textAlign: 'right' }}>{formatCurrency(gtBalance)}</td>
-                    <td style={{ ...cellBorderBold, textAlign: 'right' }}>{formatCurrency(gtRetainage)}</td>
-                  </tr>
-                );
-              })()}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {/* ---- Print styles ---- */}
+      {/* ---- Print styles + spinner animation ---- */}
       <style>{`
         @media print {
           .no-print { display: none !important; }
           body { background: #fff !important; margin: 0; padding: 0; }
         }
+        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
       `}</style>
     </div>
   );

@@ -7,8 +7,17 @@ import {
   ChevronRight,
   MessageSquare,
   Printer,
+  Download,
+  CheckCircle,
+  XCircle,
+  Loader2,
+  Wifi,
+  WifiOff,
 } from 'lucide-react';
-import { changeOrders, rfis, projects } from '../data/mockData';
+import { downloadPdf } from '../utils/downloadPdf';
+import { changeOrders as mockChangeOrders, rfis as mockRfis, projects as mockProjects } from '../data/mockData';
+import { changeOrderService, rfiService, projectService } from '../services/supabaseService';
+import { useSupabase } from '../hooks/useSupabase';
 
 const fmt = (v) => {
   if (v == null) return '$0.00';
@@ -44,19 +53,103 @@ const cellBold = { ...cell, fontWeight: 700 };
 const cellRBold = { ...cellR, fontWeight: 700 };
 const hdrCell = { ...cell, background: '#2d5f2d', color: '#fff', fontWeight: 700, fontSize: '0.7rem', textAlign: 'center', textTransform: 'uppercase' };
 
+/* ── Helper: normalise a CO record from Supabase or mock into a unified shape ── */
+function normaliseCO(raw) {
+  // Already in mock shape
+  if (raw.versions) return raw;
+  // Supabase shape: change_order_versions relation
+  const versions = (raw.change_order_versions || [])
+    .sort((a, b) => (a.version_number || 0) - (b.version_number || 0))
+    .map(v => ({
+      version: v.version_number,
+      date: v.version_date,
+      amount: Number(v.amount),
+      notes: v.notes,
+    }));
+  return {
+    id: raw.co_number || raw.id,
+    _dbId: raw.id,            // keep the real UUID for API calls
+    project: raw.project_name || raw.description,
+    projectId: raw.project_id,
+    description: raw.description,
+    amount: Number(raw.amount),
+    status: raw.status,
+    date: raw.co_date,
+    requestedBy: raw.requested_by,
+    versions: versions.length > 0 ? versions : [{ version: 1, date: raw.co_date, amount: Number(raw.amount), notes: raw.description }],
+  };
+}
+
+/* ── Helper: normalise an RFI record ── */
+function normaliseRFI(raw) {
+  if (raw.dateSubmitted !== undefined) return raw; // mock shape
+  return {
+    id: raw.rfi_number || raw.id,
+    _dbId: raw.id,
+    project: raw.project_name || raw.subject,
+    projectId: raw.project_id,
+    subject: raw.subject,
+    status: raw.status,
+    dateSubmitted: raw.date_submitted,
+    dateResponded: raw.date_responded,
+    submittedBy: raw.submitted_by,
+    response: raw.response,
+  };
+}
+
 
 export default function ChangeOrders() {
   const [activeTab, setActiveTab] = useState('changeOrders');
   const [expandedRow, setExpandedRow] = useState(null);
-  const [printCO, setPrintCO] = useState(null); // When set, show printable CO detail
+  const [printCO, setPrintCO] = useState(null);
+  const [actionLoading, setActionLoading] = useState(null); // id of CO being acted on
+
+  // Supabase data with mock fallback
+  const { data: rawCOs, loading: cosLoading, usingMock: cosMock, refetch: refetchCOs } = useSupabase(changeOrderService.list, mockChangeOrders);
+  const { data: rawRFIs, loading: rfisLoading, usingMock: rfisMock } = useSupabase(rfiService.list, mockRfis);
+  const { data: rawProjects } = useSupabase(projectService.list, mockProjects);
+
+  // Normalise data to a consistent shape
+  const changeOrders = rawCOs.map(normaliseCO);
+  const rfisData = rawRFIs.map(normaliseRFI);
+  const projectsList = rawProjects;
+
+  const usingMock = cosMock || rfisMock;
+  const loading = cosLoading || rfisLoading;
 
   const toggleRow = (id) => setExpandedRow(expandedRow === id ? null : id);
+
+  /* ── Approve / Reject handler ── */
+  const handleStatusChange = async (co, newStatus) => {
+    const dbId = co._dbId || co.id;
+    setActionLoading(co.id);
+    try {
+      await changeOrderService.updateStatus(dbId, newStatus);
+      await refetchCOs();
+    } catch (err) {
+      console.error(`Failed to ${newStatus.toLowerCase()} change order:`, err);
+      alert(`Failed to update status: ${err.message}`);
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  /* ── Loading state ── */
+  if (loading) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: 300, gap: 12 }}>
+        <Loader2 size={36} style={{ color: '#2563eb', animation: 'spin 1s linear infinite' }} />
+        <span style={{ color: '#64748b', fontSize: '0.875rem' }}>Loading change orders & RFIs...</span>
+        <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+      </div>
+    );
+  }
 
   /* ── Printable Change Order Detail (Knowify/AIA style) ── */
   if (printCO) {
     const co = changeOrders.find(c => c.id === printCO);
     if (!co) { setPrintCO(null); return null; }
-    const proj = projects.find(p => p.id === co.projectId);
+    const proj = projectsList.find(p => (p.id === co.projectId) || (p.id === co._dbId));
     const latestVersion = co.versions[co.versions.length - 1];
 
     return (
@@ -69,11 +162,14 @@ export default function ChangeOrders() {
           <button onClick={() => window.print()} className="btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             <Printer size={16} /> Print
           </button>
+          <button onClick={() => downloadPdf('change-order-pdf-content', `ChangeOrder-${co.id}`)} className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <Download size={16} /> Download PDF
+          </button>
           <span className={`badge ${coStatusBadge[co.status] || 'badge-gray'}`}>{co.status}</span>
         </div>
 
         {/* ── PAGE: Change Order Document ── */}
-        <div style={{ background: '#fff', border: '2px solid #000', padding: 0, fontFamily: 'system-ui, -apple-system, sans-serif' }}>
+        <div id="change-order-pdf-content" style={{ background: '#fff', border: '2px solid #000', padding: 0, fontFamily: 'system-ui, -apple-system, sans-serif' }}>
           {/* Header bar */}
           <div style={{ background: '#0f172a', color: '#fff', padding: '10px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <span style={{ fontWeight: 700, fontSize: '0.85rem', letterSpacing: '0.03em' }}>CHANGE ORDER</span>
@@ -238,6 +334,17 @@ export default function ChangeOrders() {
           <h1 className="page-title">Change Orders & RFIs</h1>
           <p style={{ color: '#64748b', fontSize: '0.875rem', marginTop: 4 }}>Manage change orders, revisions, and RFIs across all projects</p>
         </div>
+        {/* Live / Mock indicator */}
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 6,
+          padding: '4px 12px', borderRadius: 20,
+          background: usingMock ? '#fef3c7' : '#ecfdf5',
+          color: usingMock ? '#92400e' : '#047857',
+          fontSize: '0.7rem', fontWeight: 600,
+        }}>
+          {usingMock ? <WifiOff size={13} /> : <Wifi size={13} />}
+          {usingMock ? 'Mock Data' : 'Live'}
+        </div>
       </div>
 
       {/* Summary cards */}
@@ -282,7 +389,7 @@ export default function ChangeOrders() {
             </div>
             <div>
               <div style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 500 }}>Open RFIs</div>
-              <div style={{ fontSize: '1.5rem', fontWeight: 700, color: '#0f172a' }}>{rfis.filter(r => r.status === 'Open').length}</div>
+              <div style={{ fontSize: '1.5rem', fontWeight: 700, color: '#0f172a' }}>{rfisData.filter(r => r.status === 'Open').length}</div>
             </div>
           </div>
         </div>
@@ -358,16 +465,46 @@ export default function ChangeOrders() {
                       <td className="table-cell"><span className={`badge ${coStatusBadge[co.status] || 'badge-gray'}`}>{co.status}</span></td>
                       <td className="table-cell" style={{ color: '#64748b' }}>{co.date}</td>
                       <td className="table-cell" style={{ textAlign: 'center' }}>
-                        <button
-                          onClick={(e) => { e.stopPropagation(); setPrintCO(co.id); }}
-                          style={{
-                            padding: '4px 10px', borderRadius: 6, border: '1px solid #e2e8f0', background: '#fff',
-                            fontSize: '0.75rem', fontWeight: 600, color: '#475569', cursor: 'pointer',
-                            display: 'inline-flex', alignItems: 'center', gap: 4,
-                          }}
-                        >
-                          <FileText size={13} /> View
-                        </button>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}>
+                          <button
+                            onClick={(e) => { e.stopPropagation(); setPrintCO(co.id); }}
+                            style={{
+                              padding: '4px 10px', borderRadius: 6, border: '1px solid #e2e8f0', background: '#fff',
+                              fontSize: '0.75rem', fontWeight: 600, color: '#475569', cursor: 'pointer',
+                              display: 'inline-flex', alignItems: 'center', gap: 4,
+                            }}
+                          >
+                            <FileText size={13} /> View
+                          </button>
+                          {co.status !== 'Approved' && co.status !== 'Rejected' && (
+                            <>
+                              <button
+                                onClick={(e) => { e.stopPropagation(); handleStatusChange(co, 'Approved'); }}
+                                disabled={actionLoading === co.id}
+                                style={{
+                                  padding: '4px 8px', borderRadius: 6, border: '1px solid #bbf7d0', background: '#f0fdf4',
+                                  fontSize: '0.7rem', fontWeight: 600, color: '#15803d', cursor: 'pointer',
+                                  display: 'inline-flex', alignItems: 'center', gap: 3,
+                                  opacity: actionLoading === co.id ? 0.5 : 1,
+                                }}
+                              >
+                                <CheckCircle size={12} /> Approve
+                              </button>
+                              <button
+                                onClick={(e) => { e.stopPropagation(); handleStatusChange(co, 'Rejected'); }}
+                                disabled={actionLoading === co.id}
+                                style={{
+                                  padding: '4px 8px', borderRadius: 6, border: '1px solid #fecaca', background: '#fef2f2',
+                                  fontSize: '0.7rem', fontWeight: 600, color: '#b91c1c', cursor: 'pointer',
+                                  display: 'inline-flex', alignItems: 'center', gap: 3,
+                                  opacity: actionLoading === co.id ? 0.5 : 1,
+                                }}
+                              >
+                                <XCircle size={12} /> Reject
+                              </button>
+                            </>
+                          )}
+                        </div>
                       </td>
                     </tr>
 
@@ -431,7 +568,7 @@ export default function ChangeOrders() {
                 </tr>
               </thead>
               <tbody>
-                {rfis.map((rfi) => (
+                {rfisData.map((rfi) => (
                   <React.Fragment key={rfi.id}>
                     <tr
                       style={{ borderBottom: '1px solid #f1f5f9', cursor: 'pointer', transition: 'background 0.15s' }}

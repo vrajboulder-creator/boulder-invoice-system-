@@ -1,7 +1,9 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { FileText, Plus, CheckCircle, DollarSign, ChevronRight } from 'lucide-react';
-import { payApplications, subPayApplications } from '../data/mockData';
+import { FileText, Plus, CheckCircle, DollarSign, ChevronRight, Loader2, Shield } from 'lucide-react';
+import { payApplications as mockPayApps, subPayApplications as mockSubPayApps } from '../data/mockData';
+import { payAppService } from '../services/supabaseService';
+import { useSupabase } from '../hooks/useSupabase';
 
 const formatCurrency = (amount) =>
   new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(amount);
@@ -16,13 +18,123 @@ const statusBadge = (status) => {
   return map[status] || 'badge-gray';
 };
 
+/* Normalizer: support both snake_case (Supabase) and camelCase (mock) */
+const normalize = (pa) => ({
+  id: pa.id,
+  applicationNo: pa.application_no ?? pa.applicationNo,
+  projectName: pa.project_name ?? pa.projectName ?? '',
+  subcontractor: pa.subcontractor ?? pa.contractor_name ?? '',
+  periodTo: pa.period_to ?? pa.periodTo,
+  contractSumToDate: pa.contract_sum_to_date ?? pa.contractSumToDate ?? 0,
+  totalCompletedAndStored: pa.total_completed_and_stored ?? pa.totalCompletedAndStored ?? 0,
+  totalRetainage: pa.total_retainage ?? pa.totalRetainage ?? 0,
+  currentPaymentDue: pa.current_payment_due ?? pa.currentPaymentDue ?? 0,
+  status: pa.status ?? 'Draft',
+  isSubcontractorVersion: pa.is_subcontractor_version ?? pa.isSubcontractorVersion ?? false,
+});
+
 export default function PayApplications() {
   const [activeTab, setActiveTab] = useState('contractor');
+  const [outstandingOnly, setOutstandingOnly] = useState(false);
+  const [actionLoading, setActionLoading] = useState(null);
 
-  const allApps = [...payApplications, ...subPayApplications];
+  // Fetch all pay applications from Supabase with mock fallback
+  const { data: rawApps, loading, refetch, usingMock } = useSupabase(
+    payAppService.list,
+    [...mockPayApps, ...mockSubPayApps]
+  );
+
+  // Normalize all records
+  const allApps = rawApps.map(normalize);
+
+  // Separate contractor vs sub pay apps, apply outstanding filter
+  const isOutstandingApp = (a) => a.status === 'Submitted' || a.status === 'Approved' || a.status === 'Draft';
+  const contractorApps = allApps.filter((a) => !a.isSubcontractorVersion && (!outstandingOnly || isOutstandingApp(a)));
+  const subApps = allApps.filter((a) => a.isSubcontractorVersion && (!outstandingOnly || isOutstandingApp(a)));
+
+  // Summary cards from live data
   const totalSubmitted = allApps.filter((a) => a.status === 'Submitted').length;
   const totalApproved = allApps.filter((a) => a.status === 'Approved').length;
-  const currentAmountDue = allApps.reduce((sum, a) => sum + a.currentPaymentDue, 0);
+  const currentAmountDue = allApps.reduce((sum, a) => sum + (a.currentPaymentDue || 0), 0);
+
+  // Action handlers
+  const handleApprove = async (id) => {
+    if (usingMock) {
+      alert('Cannot update status — using mock data (Supabase not connected).');
+      return;
+    }
+    setActionLoading(id);
+    try {
+      await payAppService.updateStatus(id, 'Approved');
+      await refetch();
+    } catch (err) {
+      alert('Failed to approve: ' + err.message);
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const handleMarkPaid = async (id) => {
+    if (usingMock) {
+      alert('Cannot update status — using mock data (Supabase not connected).');
+      return;
+    }
+    setActionLoading(id);
+    try {
+      await payAppService.updateStatus(id, 'Paid');
+      await refetch();
+    } catch (err) {
+      alert('Failed to mark paid: ' + err.message);
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div style={{ padding: '3rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.75rem', color: '#64748b' }}>
+        <Loader2 size={24} style={{ animation: 'spin 1s linear infinite' }} />
+        <span style={{ fontSize: '1rem', fontWeight: 500 }}>Loading pay applications...</span>
+        <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
+      </div>
+    );
+  }
+
+  const renderActionButtons = (pa) => {
+    const isLoading = actionLoading === pa.id;
+    return (
+      <div style={{ display: 'flex', gap: '0.375rem' }}>
+        {pa.status === 'Submitted' && (
+          <button
+            onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleApprove(pa.id); }}
+            disabled={isLoading}
+            style={{
+              background: '#dcfce7', border: '1px solid #86efac', borderRadius: '4px',
+              padding: '2px 8px', fontSize: '0.6875rem', fontWeight: 600, color: '#16a34a',
+              cursor: isLoading ? 'not-allowed' : 'pointer', whiteSpace: 'nowrap',
+              display: 'inline-flex', alignItems: 'center', gap: '3px', opacity: isLoading ? 0.6 : 1,
+            }}
+          >
+            <Shield size={11} /> Approve
+          </button>
+        )}
+        {pa.status === 'Approved' && (
+          <button
+            onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleMarkPaid(pa.id); }}
+            disabled={isLoading}
+            style={{
+              background: '#ede9fe', border: '1px solid #c4b5fd', borderRadius: '4px',
+              padding: '2px 8px', fontSize: '0.6875rem', fontWeight: 600, color: '#7c3aed',
+              cursor: isLoading ? 'not-allowed' : 'pointer', whiteSpace: 'nowrap',
+              display: 'inline-flex', alignItems: 'center', gap: '3px', opacity: isLoading ? 0.6 : 1,
+            }}
+          >
+            <DollarSign size={11} /> Mark Paid
+          </button>
+        )}
+      </div>
+    );
+  };
 
   return (
     <div style={{ padding: '1.5rem' }}>
@@ -32,6 +144,7 @@ export default function PayApplications() {
           <h1 className="page-title">Pay Applications (AIA G702/G703)</h1>
           <p style={{ color: '#64748b', fontSize: '0.875rem', marginTop: '0.25rem' }}>
             Manage contractor and subcontractor pay applications
+            {usingMock && <span style={{ marginLeft: '0.5rem', color: '#d97706', fontWeight: 600 }}>(Mock Data)</span>}
           </p>
         </div>
         <Link to="/pay-applications/create" className="btn-primary" style={{ textDecoration: 'none' }}>
@@ -82,8 +195,9 @@ export default function PayApplications() {
         </div>
       </div>
 
-      {/* Tab Toggle */}
-      <div style={{ display: 'flex', gap: '0.25rem', marginBottom: '1.5rem', background: '#f1f5f9', borderRadius: '8px', padding: '4px', width: 'fit-content' }}>
+      {/* Outstanding Filter + Tab Toggle */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
+        <div style={{ display: 'flex', gap: '0.25rem', background: '#f1f5f9', borderRadius: '8px', padding: '4px', width: 'fit-content' }}>
         <button
           onClick={() => setActiveTab('contractor')}
           style={{
@@ -116,6 +230,23 @@ export default function PayApplications() {
         >
           Subcontractor Pay Apps
         </button>
+        </div>
+        <button
+          onClick={() => setOutstandingOnly((v) => !v)}
+          style={{
+            padding: '0.5rem 0.875rem',
+            borderRadius: '8px',
+            border: `1px solid ${outstandingOnly ? '#dc2626' : '#e2e8f0'}`,
+            fontSize: '0.8rem',
+            fontWeight: 600,
+            color: outstandingOnly ? '#dc2626' : '#64748b',
+            background: outstandingOnly ? '#fee2e2' : '#fff',
+            cursor: 'pointer',
+            transition: 'all 0.15s',
+          }}
+        >
+          Outstanding Only
+        </button>
       </div>
 
       {/* Contractor Pay Apps Table */}
@@ -134,11 +265,12 @@ export default function PayApplications() {
                   <th style={{ ...thStyle, textAlign: 'right' }}>Retainage</th>
                   <th style={{ ...thStyle, textAlign: 'right' }}>Current Payment Due</th>
                   <th style={thStyle}>Status</th>
+                  <th style={thStyle}>Actions</th>
                   <th style={{ ...thStyle, width: '40px' }}></th>
                 </tr>
               </thead>
               <tbody>
-                {payApplications.map((pa) => {
+                {contractorApps.map((pa) => {
                   const percentComplete = pa.contractSumToDate > 0
                     ? ((pa.totalCompletedAndStored / pa.contractSumToDate) * 100).toFixed(1)
                     : '0.0';
@@ -162,6 +294,7 @@ export default function PayApplications() {
                           {pa.status}
                         </span>
                       </td>
+                      <td style={tdStyle}>{renderActionButtons(pa)}</td>
                       <td style={tdStyle}>
                         <Link to={`/pay-applications/${pa.id}`} style={{ color: '#94a3b8' }}>
                           <ChevronRight size={16} />
@@ -170,6 +303,13 @@ export default function PayApplications() {
                     </tr>
                   );
                 })}
+                {contractorApps.length === 0 && (
+                  <tr>
+                    <td colSpan={11} style={{ ...tdStyle, textAlign: 'center', color: '#94a3b8', padding: '2rem' }}>
+                      No contractor pay applications found.
+                    </td>
+                  </tr>
+                )}
               </tbody>
             </table>
           </div>
@@ -192,11 +332,12 @@ export default function PayApplications() {
                   <th style={{ ...thStyle, textAlign: 'right' }}>Retainage</th>
                   <th style={{ ...thStyle, textAlign: 'right' }}>Current Payment Due</th>
                   <th style={thStyle}>Status</th>
+                  <th style={thStyle}>Actions</th>
                   <th style={{ ...thStyle, width: '40px' }}></th>
                 </tr>
               </thead>
               <tbody>
-                {subPayApplications.map((spa) => {
+                {subApps.map((spa) => {
                   const percentComplete = spa.contractSumToDate > 0
                     ? ((spa.totalCompletedAndStored / spa.contractSumToDate) * 100).toFixed(1)
                     : '0.0';
@@ -205,7 +346,7 @@ export default function PayApplications() {
                       <td style={tdStyle}><span style={{ fontWeight: 600 }}>{spa.applicationNo}</span></td>
                       <td style={tdStyle}>
                         <Link to={`/pay-applications/sub/${spa.id}`} style={{ color: '#2563eb', textDecoration: 'none', fontWeight: 500 }}>
-                          {spa.subcontractor}
+                          {spa.subcontractor || spa.projectName}
                         </Link>
                       </td>
                       <td style={tdStyle}>{formatDate(spa.periodTo)}</td>
@@ -220,6 +361,7 @@ export default function PayApplications() {
                           {spa.status}
                         </span>
                       </td>
+                      <td style={tdStyle}>{renderActionButtons(spa)}</td>
                       <td style={tdStyle}>
                         <Link to={`/pay-applications/sub/${spa.id}`} style={{ color: '#94a3b8' }}>
                           <ChevronRight size={16} />
@@ -228,6 +370,13 @@ export default function PayApplications() {
                     </tr>
                   );
                 })}
+                {subApps.length === 0 && (
+                  <tr>
+                    <td colSpan={11} style={{ ...tdStyle, textAlign: 'center', color: '#94a3b8', padding: '2rem' }}>
+                      No subcontractor pay applications found.
+                    </td>
+                  </tr>
+                )}
               </tbody>
             </table>
           </div>
@@ -238,6 +387,7 @@ export default function PayApplications() {
 }
 
 function formatDate(dateStr) {
+  if (!dateStr) return '';
   const d = new Date(dateStr + 'T00:00:00');
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }

@@ -1,7 +1,9 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, Send, Upload } from 'lucide-react';
-import { projects, employees } from '../data/mockData';
+import { ArrowLeft, Send, Upload, Loader2 } from 'lucide-react';
+import { projects as mockProjects, employees } from '../data/mockData';
+import { rfiService, projectService } from '../services/supabaseService';
+import { useSupabase } from '../hooks/useSupabase';
 
 const labelStyle = { display: 'block', fontSize: '0.75rem', fontWeight: 600, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.375rem' };
 
@@ -14,12 +16,47 @@ export default function RFICreate() {
   const [detailedQuestion, setDetailedQuestion] = useState('');
   const [suggestedSolution, setSuggestedSolution] = useState('');
   const [referenceDrawings, setReferenceDrawings] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [errorMsg, setErrorMsg] = useState('');
 
-  const handleSubmit = (e) => {
+  // Fetch projects from Supabase with mock fallback
+  const { data: projectsList } = useSupabase(projectService.list, mockProjects);
+
+  // Auto-generate next RFI number
+  const generateRfiNumber = () => {
+    // Simple sequential based on timestamp to avoid collisions
+    const now = new Date();
+    const seq = String(now.getTime()).slice(-4);
+    return `RFI-${seq}`;
+  };
+
+  const handleSubmit = async (e) => {
     e.preventDefault();
-    const proj = projects.find((p) => p.id === projectId);
-    alert(`RFI submitted for "${proj?.name || 'Unknown Project'}" — Subject: "${subject}" (UI only)`);
-    navigate('/change-orders');
+    setSubmitting(true);
+    setErrorMsg('');
+
+    // Find selected employee name
+    const emp = employees.find(em => em.id === submittedBy);
+    const submitterName = emp ? emp.name : submittedBy;
+    const today = new Date().toISOString().split('T')[0];
+
+    const rfi = {
+      rfi_number: generateRfiNumber(),
+      project_id: projectId,
+      subject,
+      submitted_by: submitterName,
+      date_submitted: today,
+      status: 'Open',
+    };
+
+    try {
+      await rfiService.create(rfi);
+      navigate('/change-orders');
+    } catch (err) {
+      console.error('Failed to create RFI:', err);
+      setErrorMsg(`Failed to create RFI: ${err.message}`);
+      setSubmitting(false);
+    }
   };
 
   return (
@@ -34,6 +71,17 @@ export default function RFICreate() {
         </button>
         <h1 className="page-title">New RFI</h1>
       </div>
+
+      {/* Error message */}
+      {errorMsg && (
+        <div style={{
+          background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 8,
+          padding: '12px 16px', marginBottom: '1rem', color: '#b91c1c',
+          fontSize: '0.85rem', fontWeight: 500,
+        }}>
+          {errorMsg}
+        </div>
+      )}
 
       {/* Form Card */}
       <form onSubmit={handleSubmit}>
@@ -50,7 +98,7 @@ export default function RFICreate() {
                 style={{ appearance: 'auto' }}
               >
                 <option value="">Select a project...</option>
-                {projects.map((p) => (
+                {projectsList.map((p) => (
                   <option key={p.id} value={p.id}>
                     {p.name} ({p.id})
                   </option>
@@ -171,15 +219,25 @@ export default function RFICreate() {
 
           {/* Actions */}
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem', borderTop: '1px solid #e2e8f0', paddingTop: '1.5rem' }}>
-            <button type="button" className="btn-secondary" onClick={() => navigate('/change-orders')}>
+            <button type="button" className="btn-secondary" onClick={() => navigate('/change-orders')} disabled={submitting}>
               Cancel
             </button>
-            <button type="submit" className="btn-primary">
-              <Send size={16} /> Submit RFI
+            <button type="submit" className="btn-primary" disabled={submitting} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              {submitting ? (
+                <>
+                  <Loader2 size={16} style={{ animation: 'spin 1s linear infinite' }} /> Submitting...
+                </>
+              ) : (
+                <>
+                  <Send size={16} /> Submit RFI
+                </>
+              )}
             </button>
           </div>
         </div>
       </form>
+
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </div>
   );
 }

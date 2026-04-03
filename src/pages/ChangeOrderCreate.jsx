@@ -1,7 +1,9 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, Send, Upload } from 'lucide-react';
-import { projects } from '../data/mockData';
+import { ArrowLeft, Send, Upload, Loader2 } from 'lucide-react';
+import { projects as mockProjects, changeOrders as mockChangeOrders } from '../data/mockData';
+import { changeOrderService, projectService } from '../services/supabaseService';
+import { useSupabase } from '../hooks/useSupabase';
 
 const labelStyle = { display: 'block', fontSize: '0.75rem', fontWeight: 600, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.375rem' };
 
@@ -12,12 +14,59 @@ export default function ChangeOrderCreate() {
   const [requestedBy, setRequestedBy] = useState('');
   const [amount, setAmount] = useState('');
   const [justification, setJustification] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [errorMsg, setErrorMsg] = useState('');
 
-  const handleSubmit = (e) => {
+  // Fetch projects from Supabase with mock fallback
+  const { data: projectsList } = useSupabase(projectService.list, mockProjects);
+
+  // Auto-generate next CO number
+  const generateCoNumber = () => {
+    // Look at mock data to determine the highest existing number
+    const existingNumbers = mockChangeOrders
+      .map(co => {
+        const match = (co.id || co.co_number || '').match(/CO-(\d+)/);
+        return match ? parseInt(match[1], 10) : 0;
+      })
+      .filter(n => n > 0);
+    const maxNum = existingNumbers.length > 0 ? Math.max(...existingNumbers) : 0;
+    return `CO-${String(maxNum + 1).padStart(3, '0')}`;
+  };
+
+  const handleSubmit = async (e) => {
     e.preventDefault();
-    const proj = projects.find((p) => p.id === projectId);
-    alert(`Change Order submitted for "${proj?.name || 'Unknown Project'}" — $${parseFloat(amount || 0).toLocaleString()} (UI only)`);
-    navigate('/change-orders');
+    setSubmitting(true);
+    setErrorMsg('');
+
+    const coNumber = generateCoNumber();
+    const parsedAmount = parseFloat(amount || 0);
+    const today = new Date().toISOString().split('T')[0];
+
+    const co = {
+      co_number: coNumber,
+      project_id: projectId,
+      description,
+      amount: parsedAmount,
+      status: 'Pending',
+      requested_by: requestedBy,
+      co_date: today,
+    };
+
+    const initialVersion = {
+      version_number: 1,
+      amount: parsedAmount,
+      notes: justification || description,
+      version_date: today,
+    };
+
+    try {
+      await changeOrderService.create(co, [initialVersion]);
+      navigate('/change-orders');
+    } catch (err) {
+      console.error('Failed to create change order:', err);
+      setErrorMsg(`Failed to create change order: ${err.message}`);
+      setSubmitting(false);
+    }
   };
 
   return (
@@ -32,6 +81,17 @@ export default function ChangeOrderCreate() {
         </button>
         <h1 className="page-title">New Change Order</h1>
       </div>
+
+      {/* Error message */}
+      {errorMsg && (
+        <div style={{
+          background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 8,
+          padding: '12px 16px', marginBottom: '1rem', color: '#b91c1c',
+          fontSize: '0.85rem', fontWeight: 500,
+        }}>
+          {errorMsg}
+        </div>
+      )}
 
       {/* Form Card */}
       <form onSubmit={handleSubmit}>
@@ -48,7 +108,7 @@ export default function ChangeOrderCreate() {
                 style={{ appearance: 'auto' }}
               >
                 <option value="">Select a project...</option>
-                {projects.map((p) => (
+                {projectsList.map((p) => (
                   <option key={p.id} value={p.id}>
                     {p.name} ({p.id})
                   </option>
@@ -142,15 +202,25 @@ export default function ChangeOrderCreate() {
 
           {/* Actions */}
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem', borderTop: '1px solid #e2e8f0', paddingTop: '1.5rem' }}>
-            <button type="button" className="btn-secondary" onClick={() => navigate('/change-orders')}>
+            <button type="button" className="btn-secondary" onClick={() => navigate('/change-orders')} disabled={submitting}>
               Cancel
             </button>
-            <button type="submit" className="btn-primary">
-              <Send size={16} /> Submit Change Order
+            <button type="submit" className="btn-primary" disabled={submitting} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              {submitting ? (
+                <>
+                  <Loader2 size={16} style={{ animation: 'spin 1s linear infinite' }} /> Submitting...
+                </>
+              ) : (
+                <>
+                  <Send size={16} /> Submit Change Order
+                </>
+              )}
             </button>
           </div>
         </div>
       </form>
+
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </div>
   );
 }

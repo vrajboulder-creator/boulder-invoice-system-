@@ -1,4 +1,5 @@
 import { NavLink } from 'react-router-dom';
+import boulderLogo from '../../assets/boulder-logo.png';
 import {
   LayoutDashboard,
   FolderKanban,
@@ -8,24 +9,25 @@ import {
   Receipt,
   DollarSign,
   Users,
-  HardHat,
   FolderOpen,
   BarChart3,
   Settings,
   ClipboardList,
-  FileCheck,
   ShieldCheck,
 } from 'lucide-react';
 
+// Brand orange extracted from the Boulder logo
+const BRAND = '#f07030';
+
 const navSections = [
   {
-    label: 'MAIN',
+    label: 'Main',
     links: [
       { to: '/', icon: LayoutDashboard, text: 'Dashboard' },
     ],
   },
   {
-    label: 'WORK',
+    label: 'Work',
     links: [
       { to: '/projects', icon: FolderKanban, text: 'Projects' },
       { to: '/scheduling', icon: Calendar, text: 'Scheduling' },
@@ -34,24 +36,23 @@ const navSections = [
     ],
   },
   {
-    label: 'FINANCE',
+    label: 'Finance',
     links: [
       { to: '/estimates', icon: FileText, text: 'Estimates' },
-      { to: '/invoices', icon: Receipt, text: 'Invoices' },
-      { to: '/pay-applications', icon: FileCheck, text: 'Pay Applications' },
+      { to: '/invoices', icon: Receipt, text: 'Invoices (G702)' },
       { to: '/lien-waivers', icon: ShieldCheck, text: 'Lien Waivers' },
       { to: '/job-costing', icon: DollarSign, text: 'Job Costing' },
     ],
   },
   {
-    label: 'PEOPLE',
+    label: 'People',
     links: [
       { to: '/clients', icon: Users, text: 'Clients' },
       { to: '/subcontractors', icon: HardHat, text: 'Subcontractors' },
     ],
   },
   {
-    label: 'OTHER',
+    label: 'Other',
     links: [
       { to: '/documents', icon: FolderOpen, text: 'Documents' },
       { to: '/reports', icon: BarChart3, text: 'Reports' },
@@ -67,47 +68,56 @@ function Sidebar() {
         position: 'fixed',
         top: 0,
         left: 0,
-        width: 260,
+        width: 240,
         height: '100vh',
-        background: '#0f172a',
+        background: '#ffffff',
         display: 'flex',
         flexDirection: 'column',
-        padding: '1.5rem 0.75rem',
+        padding: '0',
         overflowY: 'auto',
         zIndex: 50,
+        borderRight: '1px solid #e5e7eb',
       }}
     >
       {/* Logo */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '0 0.75rem', marginBottom: '2rem' }}>
-        <HardHat size={28} color="#f59e0b" />
-        <div>
-          <div style={{ color: '#fff', fontWeight: 700, fontSize: '1.1rem', lineHeight: 1.2 }}>
-            Boulder
-          </div>
-          <div style={{ color: '#94a3b8', fontSize: '0.75rem', fontWeight: 500 }}>
-            Construction
-          </div>
+      <div
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          padding: '1.25rem 1rem 1rem',
+          borderBottom: '1px solid #f3f4f6',
+          gap: '0.25rem',
+        }}
+      >
+        <img
+          src={boulderLogo}
+          alt="Boulder Construction"
+          style={{ width: '140px', height: 'auto', display: 'block' }}
+        />
+        <div style={{ color: '#9ca3af', fontSize: '0.65rem', fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase' }}>
+          Construction CRM
         </div>
       </div>
 
       {/* Navigation */}
-      <nav style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+      <nav style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '0', padding: '0.75rem 0.75rem 0' }}>
         {navSections.map((section) => (
-          <div key={section.label}>
+          <div key={section.label} style={{ marginBottom: '1rem' }}>
             <div
               style={{
-                fontSize: '0.65rem',
-                fontWeight: 600,
-                color: '#64748b',
+                fontSize: '0.6rem',
+                fontWeight: 700,
+                color: '#d1d5db',
                 textTransform: 'uppercase',
-                letterSpacing: '0.05em',
-                padding: '0 0.75rem',
-                marginBottom: '0.375rem',
+                letterSpacing: '0.1em',
+                padding: '0 0.5rem',
+                marginBottom: '0.25rem',
               }}
             >
               {section.label}
             </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.125rem' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '1px' }}>
               {section.links.map(({ to, icon: Icon, text }) => (
                 <NavLink
                   key={to}
@@ -117,7 +127,7 @@ function Sidebar() {
                     `sidebar-link${isActive ? ' active' : ''}`
                   }
                 >
-                  <Icon size={18} />
+                  <Icon size={16} />
                   {text}
                 </NavLink>
               ))}
@@ -131,34 +141,36 @@ function Sidebar() {
         style={{
           display: 'flex',
           alignItems: 'center',
-          gap: '0.75rem',
-          padding: '0.75rem',
-          borderTop: '1px solid rgba(255,255,255,0.08)',
-          marginTop: '0.75rem',
+          gap: '0.625rem',
+          padding: '0.875rem 1rem',
+          borderTop: '1px solid #f3f4f6',
+          margin: '0 0.75rem 0.75rem',
+          borderRadius: '0.625rem',
+          background: '#fafafa',
         }}
       >
         <div
           style={{
-            width: 36,
-            height: 36,
+            width: 32,
+            height: 32,
             borderRadius: '50%',
-            background: '#f59e0b',
+            background: BRAND,
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
             color: '#fff',
             fontWeight: 700,
-            fontSize: '0.8rem',
+            fontSize: '0.7rem',
             flexShrink: 0,
           }}
         >
           MT
         </div>
-        <div>
-          <div style={{ color: '#fff', fontSize: '0.875rem', fontWeight: 600, lineHeight: 1.2 }}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ color: '#111827', fontSize: '0.8125rem', fontWeight: 600, lineHeight: 1.2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
             Mike Thornton
           </div>
-          <div style={{ color: '#94a3b8', fontSize: '0.75rem' }}>
+          <div style={{ color: '#9ca3af', fontSize: '0.7rem' }}>
             Admin
           </div>
         </div>
