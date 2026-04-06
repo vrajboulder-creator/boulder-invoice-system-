@@ -1,6 +1,8 @@
 import { Link } from 'react-router-dom';
 import { Plus, FileText } from 'lucide-react';
-import { estimates } from '../data/mockData';
+import { estimates as mockEstimates } from '../data/mockData';
+import { estimateService } from '../services/supabaseService';
+import { useSupabase } from '../hooks/useSupabase';
 
 const statusBadge = (status) => {
   const map = {
@@ -16,6 +18,8 @@ const formatCurrency = (amount) =>
   new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(amount);
 
 export default function Estimates() {
+  const { data: estimates } = useSupabase(estimateService.list, mockEstimates);
+
   return (
     <div style={{ padding: '1.5rem' }}>
       {/* Header */}

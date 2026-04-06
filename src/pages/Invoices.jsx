@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Plus, DollarSign, TrendingUp, AlertCircle, FileText, CheckCircle, Clock, Loader2, Database, HardDrive } from 'lucide-react';
-import { payApplications as mockPayApps, clients as mockClients, projects as mockProjects } from '../data/mockData';
+import { Plus, DollarSign, TrendingUp, AlertCircle, FileText, CheckCircle, Clock, Loader2, Database, HardDrive, Search } from 'lucide-react';
+import { invoices as mockInvoiceData, clients as mockClients, projects as mockProjects, contracts as mockContracts } from '../data/mockData';
 import { invoiceService } from '../services/supabaseService';
 import { useSupabase } from '../hooks/useSupabase';
 
@@ -22,14 +22,19 @@ export default function Invoices() {
   const [statusFilter, setStatusFilter] = useState('All');
   const [outstandingOnly, setOutstandingOnly] = useState(false);
   const [actionLoading, setActionLoading] = useState(null); // tracks which invoice id is being acted on
+  const [search, setSearch] = useState('');
+  const [clientFilter, setClientFilter] = useState('');
+  const [projectFilter, setProjectFilter] = useState('');
+  const [contractFilter, setContractFilter] = useState('');
 
   // Fetch invoices from Supabase with mock fallback
-  const { data: invoices, loading, usingMock, refetch } = useSupabase(invoiceService.list, mockPayApps);
+  const { data: invoices, loading, usingMock, refetch } = useSupabase(invoiceService.list, mockInvoiceData);
 
-  // Normalize fields — works for both Supabase pay_applications and mock payApplications
+  // Normalize fields — works for Supabase, mock invoices, and mock payApplications
   const getClientName = (inv) => {
     if (inv.owner_name) return inv.owner_name; // Supabase pay_applications
     if (inv.owner) return inv.owner; // mock payApplications
+    if (inv.client) return inv.client; // mock invoices (company string)
     const cId = inv.client_id || inv.clientId;
     const found = mockClients.find((c) => c.id === cId);
     return found ? found.company : cId || '—';
@@ -37,20 +42,25 @@ export default function Invoices() {
 
   const getProjectName = (inv) => {
     if (inv.project_name) return inv.project_name; // Supabase
-    if (inv.projectName) return inv.projectName; // mock
+    if (inv.projectName) return inv.projectName; // mock payApplications
+    if (inv.project) return inv.project; // mock invoices
     const pId = inv.project_id || inv.projectId;
     const found = mockProjects.find((p) => p.id === pId);
     return found ? found.name : pId || '—';
   };
 
+  const getContractId = (inv) => inv.contract_id || inv.contractId || null;
+  const getContractLabel = (inv) => {
+    const cid = getContractId(inv);
+    if (!cid) return null;
+    const con = mockContracts.find((c) => c.id === cid);
+    return con ? `${cid}` : cid;
+  };
+
   const getAmount = (inv) => inv.current_payment_due || inv.currentPaymentDue || inv.amount || 0;
   const getDueDate = (inv) => inv.period_to || inv.periodTo || inv.due_date || inv.dueDate || '';
   const getPaidDate = (inv) => inv.paid_date || inv.paidDate || '';
-  const getInvoiceNumber = (inv) => {
-    const appNo = inv.application_no || inv.applicationNo;
-    if (appNo) return `INV-${String(appNo).padStart(3, '0')}`;
-    return inv.invoice_number || inv.id || '';
-  };
+  const getInvoiceNumber = (inv) => inv.id || inv.invoice_number || '';
   const getStatus = (inv) => inv.status || '';
 
   // ── Summary calculations from live data ──
@@ -91,6 +101,13 @@ export default function Invoices() {
     return totalInvoiced - totalPaid;
   };
 
+  // Per-invoice outstanding: what is still owed on this specific invoice
+  const getInvoiceOutstanding = (inv) => {
+    const s = getStatus(inv);
+    if (s === 'Paid' || s === 'Draft') return 0;
+    return getAmount(inv); // Pending or Overdue → full amount still owed
+  };
+
   // Filtered invoices
   let filtered = statusFilter === 'All' ? invoices : invoices.filter((i) => getStatus(i) === statusFilter);
   if (outstandingOnly) {
@@ -99,6 +116,31 @@ export default function Invoices() {
       return s === 'Pending' || s === 'Overdue';
     });
   }
+  if (search.trim()) {
+    const q = search.toLowerCase();
+    filtered = filtered.filter((i) =>
+      getInvoiceNumber(i).toLowerCase().includes(q) ||
+      getClientName(i).toLowerCase().includes(q) ||
+      getProjectName(i).toLowerCase().includes(q)
+    );
+  }
+  if (clientFilter) {
+    filtered = filtered.filter((i) => (i.client_id || i.clientId) === clientFilter);
+  }
+  if (projectFilter) {
+    filtered = filtered.filter((i) => (i.project_id || i.projectId) === projectFilter);
+  }
+  if (contractFilter) {
+    filtered = filtered.filter((i) => (i.contract_id || i.contractId) === contractFilter);
+  }
+
+  // Unique clients/projects from live invoice data for filter dropdowns
+  const invoiceClientIds = [...new Set(invoices.map((i) => i.client_id || i.clientId).filter(Boolean))];
+  const invoiceProjectIds = [...new Set(invoices.map((i) => i.project_id || i.projectId).filter(Boolean))];
+  const invoiceContractIds = [...new Set(invoices.map((i) => i.contract_id || i.contractId).filter(Boolean))];
+  const filterClients = mockClients.filter((c) => invoiceClientIds.includes(c.id));
+  const filterProjects = mockProjects.filter((p) => invoiceProjectIds.includes(p.id));
+  const filterContracts = mockContracts.filter((c) => invoiceContractIds.includes(c.id));
 
   // ── Actions ──
   const handleMarkPaid = async (id) => {
@@ -250,36 +292,53 @@ export default function Invoices() {
             </div>
           </div>
 
-          {/* Filter */}
-          <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: '0.75rem', marginBottom: '1rem' }}>
-            <button
-              onClick={() => setOutstandingOnly((v) => !v)}
-              style={{
-                padding: '0.5rem 0.875rem',
-                borderRadius: '8px',
-                border: `1px solid ${outstandingOnly ? '#dc2626' : '#e2e8f0'}`,
-                fontSize: '0.8rem',
-                fontWeight: 600,
-                color: outstandingOnly ? '#dc2626' : '#64748b',
-                background: outstandingOnly ? '#fee2e2' : '#fff',
-                cursor: 'pointer',
-                transition: 'all 0.15s',
-              }}
+          {/* Filter Bar */}
+          <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '0.625rem', marginBottom: '1rem' }}>
+            {/* Search */}
+            <div style={{ position: 'relative', flex: '1 1 200px', minWidth: 160 }}>
+              <Search size={14} style={{ position: 'absolute', left: '0.625rem', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8', pointerEvents: 'none' }} />
+              <input
+                type="text"
+                placeholder="Search invoices…"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                style={{ width: '100%', paddingLeft: '2rem', paddingRight: '0.75rem', paddingTop: '0.5rem', paddingBottom: '0.5rem', borderRadius: '8px', border: '1px solid #e2e8f0', fontSize: '0.875rem', color: '#1e293b', background: '#fff', boxSizing: 'border-box' }}
+              />
+            </div>
+            {/* Client */}
+            <select
+              value={clientFilter}
+              onChange={(e) => { setClientFilter(e.target.value); setProjectFilter(''); }}
+              style={{ padding: '0.5rem 0.75rem', borderRadius: '8px', border: '1px solid #e2e8f0', fontSize: '0.875rem', color: clientFilter ? '#1e293b' : '#94a3b8', background: '#fff', cursor: 'pointer' }}
             >
-              Outstanding Only
-            </button>
+              <option value="">All Clients</option>
+              {filterClients.map((c) => <option key={c.id} value={c.id}>{c.company}</option>)}
+            </select>
+            {/* Project */}
+            <select
+              value={projectFilter}
+              onChange={(e) => setProjectFilter(e.target.value)}
+              style={{ padding: '0.5rem 0.75rem', borderRadius: '8px', border: '1px solid #e2e8f0', fontSize: '0.875rem', color: projectFilter ? '#1e293b' : '#94a3b8', background: '#fff', cursor: 'pointer' }}
+            >
+              <option value="">All Projects</option>
+              {filterProjects
+                .filter((p) => !clientFilter || p.clientId === clientFilter)
+                .map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+            {/* Contract */}
+            <select
+              value={contractFilter}
+              onChange={(e) => setContractFilter(e.target.value)}
+              style={{ padding: '0.5rem 0.75rem', borderRadius: '8px', border: '1px solid #e2e8f0', fontSize: '0.875rem', color: contractFilter ? '#1e293b' : '#94a3b8', background: '#fff', cursor: 'pointer' }}
+            >
+              <option value="">All Contracts</option>
+              {filterContracts.map((c) => <option key={c.id} value={c.id}>{c.id} — {c.title.slice(0, 30)}{c.title.length > 30 ? '…' : ''}</option>)}
+            </select>
+            {/* Status */}
             <select
               value={statusFilter}
               onChange={(e) => setStatusFilter(e.target.value)}
-              style={{
-                padding: '0.5rem 0.75rem',
-                borderRadius: '8px',
-                border: '1px solid #e2e8f0',
-                fontSize: '0.875rem',
-                color: '#1e293b',
-                background: '#fff',
-                cursor: 'pointer',
-              }}
+              style={{ padding: '0.5rem 0.75rem', borderRadius: '8px', border: '1px solid #e2e8f0', fontSize: '0.875rem', color: '#1e293b', background: '#fff', cursor: 'pointer' }}
             >
               <option value="All">All Statuses</option>
               <option value="Paid">Paid</option>
@@ -287,6 +346,22 @@ export default function Invoices() {
               <option value="Overdue">Overdue</option>
               <option value="Draft">Draft</option>
             </select>
+            {/* Outstanding toggle */}
+            <button
+              onClick={() => setOutstandingOnly((v) => !v)}
+              style={{ padding: '0.5rem 0.875rem', borderRadius: '8px', border: `1px solid ${outstandingOnly ? '#dc2626' : '#e2e8f0'}`, fontSize: '0.8rem', fontWeight: 600, color: outstandingOnly ? '#dc2626' : '#64748b', background: outstandingOnly ? '#fee2e2' : '#fff', cursor: 'pointer', transition: 'all 0.15s', whiteSpace: 'nowrap' }}
+            >
+              Outstanding Only
+            </button>
+            {/* Clear filters */}
+            {(search || clientFilter || projectFilter || contractFilter || statusFilter !== 'All' || outstandingOnly) && (
+              <button
+                onClick={() => { setSearch(''); setClientFilter(''); setProjectFilter(''); setContractFilter(''); setStatusFilter('All'); setOutstandingOnly(false); }}
+                style={{ padding: '0.5rem 0.75rem', borderRadius: '8px', border: '1px solid #e2e8f0', fontSize: '0.8rem', fontWeight: 500, color: '#64748b', background: '#f8fafc', cursor: 'pointer', whiteSpace: 'nowrap' }}
+              >
+                Clear
+              </button>
+            )}
           </div>
 
           {/* Invoice Table */}
@@ -295,9 +370,11 @@ export default function Invoices() {
               <thead>
                 <tr style={{ borderBottom: '1px solid #f1f5f9' }}>
                   <th className="table-header">Invoice ID</th>
+                  <th className="table-header">Contract</th>
                   <th className="table-header">Client</th>
                   <th className="table-header">Project</th>
                   <th className="table-header">Amount ($)</th>
+                  <th className="table-header">Invoice Outstanding</th>
                   <th className="table-header">Project Outstanding</th>
                   <th className="table-header">Due Date</th>
                   <th className="table-header">Status</th>
@@ -326,9 +403,22 @@ export default function Invoices() {
                           {invNumber}
                         </Link>
                       </td>
+                      <td className="table-cell">
+                        {getContractId(inv)
+                          ? <Link to={`/contracts/${getContractId(inv)}`} style={{ color: '#7c3aed', fontWeight: 600, textDecoration: 'none', fontSize: '0.8rem' }}>{getContractId(inv)}</Link>
+                          : <span style={{ color: '#94a3b8', fontSize: '0.8rem' }}>—</span>}
+                      </td>
                       <td className="table-cell" style={{ fontWeight: 500, color: '#1e293b' }}>{getClientName(inv)}</td>
                       <td className="table-cell">{getProjectName(inv)}</td>
                       <td className="table-cell" style={{ fontWeight: 600, color: '#1e293b' }}>{formatCurrency(getAmount(inv))}</td>
+                      <td className="table-cell">
+                        {(() => {
+                          const own = getInvoiceOutstanding(inv);
+                          if (own === 0 && getStatus(inv) === 'Paid') return <span style={{ fontWeight: 600, color: '#16a34a' }}>$0 — Paid</span>;
+                          if (own === 0) return <span style={{ color: '#94a3b8' }}>—</span>;
+                          return <span style={{ fontWeight: 700, color: '#dc2626' }}>{formatCurrency(own)}</span>;
+                        })()}
+                      </td>
                       <td className="table-cell">
                         {(() => {
                           const outstanding = getProjectOutstanding(inv);
@@ -394,7 +484,7 @@ export default function Invoices() {
                 })}
                 {filtered.length === 0 && (
                   <tr>
-                    <td colSpan={8} style={{ padding: '2rem', textAlign: 'center', color: '#94a3b8' }}>
+                    <td colSpan={10} style={{ padding: '2rem', textAlign: 'center', color: '#94a3b8' }}>
                       No invoices found.
                     </td>
                   </tr>

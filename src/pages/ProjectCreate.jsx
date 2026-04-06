@@ -1,7 +1,9 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, Plus, X, Save, Users, Layers } from 'lucide-react';
-import { clients } from '../data/mockData';
+import { ArrowLeft, Plus, X, Save, Users, Layers, Loader2 } from 'lucide-react';
+import { clients as mockClients } from '../data/mockData';
+import { projectService, clientService } from '../services/supabaseService';
+import { useSupabase } from '../hooks/useSupabase';
 
 const teamMembers = [
   { name: 'Mike Thornton', role: 'Project Manager' },
@@ -45,6 +47,10 @@ export default function ProjectCreate() {
   const [contractType, setContractType] = useState('');
   const [selectedTeam, setSelectedTeam] = useState([]);
   const [phases, setPhases] = useState([...defaultPhases]);
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState(null);
+
+  const { data: clients } = useSupabase(clientService.list, mockClients);
 
   const toggleTeamMember = (name) => {
     setSelectedTeam((prev) =>
@@ -68,9 +74,32 @@ export default function ProjectCreate() {
     setPhases((prev) => prev.filter((_, i) => i !== index));
   };
 
-  const handleSave = () => {
-    alert('Project created successfully (UI only).');
-    navigate('/projects');
+  const handleSave = async () => {
+    setSubmitting(true);
+    setSubmitError(null);
+    const client = clients.find((c) => c.id === clientId);
+    const projectRow = {
+      name: projectName,
+      client_id: clientId || null,
+      client_name: client?.name || null,
+      client_company: client?.company || null,
+      description,
+      status,
+      budget: parseFloat(budget) || 0,
+      start_date: startDate || null,
+      deadline: deadline || null,
+      contract_type: contractType || null,
+      team: selectedTeam,
+      phases,
+      progress: 0,
+    };
+    try {
+      await projectService.create(projectRow);
+      navigate('/projects');
+    } catch (err) {
+      setSubmitError(err.message || 'Failed to create project.');
+      setSubmitting(false);
+    }
   };
 
   return (
@@ -306,12 +335,18 @@ export default function ProjectCreate() {
         <hr style={{ border: 'none', borderTop: '1px solid #e2e8f0', margin: '0 0 1.5rem 0' }} />
 
         {/* Actions */}
+        {submitError && (
+          <div style={{ padding: '0.75rem 1rem', marginBottom: '1rem', borderRadius: 8, background: '#fef2f2', border: '1px solid #fecaca', color: '#991b1b', fontSize: '0.875rem' }}>
+            {submitError}
+          </div>
+        )}
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem' }}>
-          <button className="btn-secondary" onClick={() => navigate('/projects')}>
+          <style>{`@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}`}</style>
+          <button className="btn-secondary" onClick={() => navigate('/projects')} disabled={submitting}>
             Cancel
           </button>
-          <button className="btn-primary" onClick={handleSave}>
-            <Save size={16} /> Save Project
+          <button className="btn-primary" onClick={handleSave} disabled={submitting}>
+            {submitting ? <Loader2 size={15} style={{ animation: 'spin 1s linear infinite' }} /> : <Save size={16} />} Save Project
           </button>
         </div>
       </div>

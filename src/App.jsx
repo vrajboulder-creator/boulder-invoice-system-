@@ -16,6 +16,10 @@ import TimeTracking from './pages/TimeTracking';
 import ChangeOrders from './pages/ChangeOrders';
 import ChangeOrderCreate from './pages/ChangeOrderCreate';
 import RFICreate from './pages/RFICreate';
+import RFIs from './pages/RFIs';
+import RFIDetail from './pages/RFIDetail';
+import DailyLogs from './pages/DailyLogs';
+import ChangeOrderDetail from './pages/ChangeOrderDetail';
 import Documents from './pages/Documents';
 import DocumentUpload from './pages/DocumentUpload';
 import Subcontractors from './pages/Subcontractors';
@@ -24,6 +28,9 @@ import SubcontractorCreate from './pages/SubcontractorCreate';
 import Invoices from './pages/Invoices';
 import InvoiceDetail from './pages/InvoiceDetail';
 import InvoiceCreate from './pages/InvoiceCreate';
+import Contracts from './pages/Contracts';
+import ContractCreate from './pages/ContractCreate';
+import ContractDetail from './pages/ContractDetail';
 import LienWaivers from './pages/LienWaivers';
 import LienWaiverDetail from './pages/LienWaiverDetail';
 import LienWaiverCreate from './pages/LienWaiverCreate';
@@ -67,10 +74,18 @@ function App() {
           <Route path="scheduling" element={<Scheduling />} />
           <Route path="time-tracking" element={<TimeTracking />} />
 
-          {/* Change Orders & RFIs */}
+          {/* Change Orders */}
           <Route path="change-orders" element={<ChangeOrders />} />
           <Route path="change-orders/create" element={<ChangeOrderCreate />} />
+          <Route path="change-orders/:id" element={<ChangeOrderDetail />} />
+
+          {/* RFIs */}
+          <Route path="rfis" element={<RFIs />} />
           <Route path="rfis/create" element={<RFICreate />} />
+          <Route path="rfis/:id" element={<RFIDetail />} />
+
+          {/* Daily Logs */}
+          <Route path="daily-logs" element={<DailyLogs />} />
 
           {/* Documents */}
           <Route path="documents" element={<Documents />} />
@@ -90,6 +105,11 @@ function App() {
           <Route path="pay-applications" element={<Invoices />} />
           <Route path="pay-applications/create" element={<InvoiceCreate />} />
           <Route path="pay-applications/:id" element={<InvoiceDetail />} />
+
+          {/* Contracts */}
+          <Route path="contracts" element={<Contracts />} />
+          <Route path="contracts/create" element={<ContractCreate />} />
+          <Route path="contracts/:id" element={<ContractDetail />} />
 
           {/* Lien Waivers */}
           <Route path="lien-waivers" element={<LienWaivers />} />

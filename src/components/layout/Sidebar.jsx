@@ -14,6 +14,10 @@ import {
   Settings,
   ClipboardList,
   ShieldCheck,
+  HardHat,
+  FileSignature,
+  MessageSquare,
+  BookOpen,
 } from 'lucide-react';
 
 // Brand orange extracted from the Boulder logo
@@ -33,11 +37,14 @@ const navSections = [
       { to: '/scheduling', icon: Calendar, text: 'Scheduling' },
       { to: '/time-tracking', icon: Clock, text: 'Time Tracking' },
       { to: '/change-orders', icon: ClipboardList, text: 'Change Orders' },
+      { to: '/rfis', icon: MessageSquare, text: 'RFIs' },
+      { to: '/daily-logs', icon: BookOpen, text: 'Daily Logs' },
     ],
   },
   {
     label: 'Finance',
     links: [
+      { to: '/contracts', icon: FileSignature, text: 'Contracts' },
       { to: '/estimates', icon: FileText, text: 'Estimates' },
       { to: '/invoices', icon: Receipt, text: 'Invoices (G702)' },
       { to: '/lien-waivers', icon: ShieldCheck, text: 'Lien Waivers' },

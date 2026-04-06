@@ -393,7 +393,7 @@ export const rfiService = {
   },
 };
 
-// ── Projects (for dropdowns) ────────────────────────────────
+// ── Projects ────────────────────────────────────────────────
 export const projectService = {
   async list() {
     return fetchAll('projects', { order: { column: 'created_at', ascending: false } });
@@ -401,11 +401,94 @@ export const projectService = {
   async getById(id) {
     return fetchById('projects', id);
   },
+  async create(project) {
+    if (!project.id) project.id = generateId('PRJ');
+    return insertRow('projects', project);
+  },
+  async updateStatus(id, status) {
+    return updateRow('projects', id, { status });
+  },
 };
 
-// ── Clients (for dropdowns) ─────────────────────────────────
+// ── Clients ──────────────────────────────────────────────────
 export const clientService = {
   async list() {
     return fetchAll('clients', { order: { column: 'name', ascending: true } });
+  },
+  async create(client) {
+    if (!client.id) client.id = generateId('CLI');
+    return insertRow('clients', client);
+  },
+};
+
+// ── Contracts ───────────────────────────────────────────────
+export const contractService = {
+  async list() {
+    return fetchAll('contracts', { order: { column: 'created_at', ascending: false } });
+  },
+  async getById(id) {
+    const contract = await fetchById('contracts', id);
+    const { data: lineItems } = await supabase
+      .from('contract_line_items')
+      .select('*')
+      .eq('contract_id', id)
+      .order('sort_order', { ascending: true });
+    contract.lineItems = (lineItems || []).map((li) => ({ description: li.description, amount: parseFloat(li.amount) }));
+    return contract;
+  },
+  async create(contract, lineItems = []) {
+    if (!contract.id) contract.id = generateId('CON');
+    const { data: conData, error } = await supabase.from('contracts').insert(contract).select().single();
+    if (error) throw error;
+    if (lineItems.length > 0) {
+      const rows = lineItems.map((li, i) => ({
+        contract_id: conData.id,
+        description: li.description,
+        amount: li.amount,
+        sort_order: i,
+      }));
+      await insertMany('contract_line_items', rows);
+    }
+    return conData;
+  },
+  async updateStatus(id, status, extra = {}) {
+    return updateRow('contracts', id, { status, ...extra });
+  },
+};
+
+// ── Estimates ───────────────────────────────────────────────
+export const estimateService = {
+  async list() {
+    return fetchAll('estimates', { order: { column: 'created_at', ascending: false } });
+  },
+  async getById(id) {
+    const est = await fetchById('estimates', id);
+    const { data: lineItems } = await supabase
+      .from('estimate_line_items')
+      .select('*')
+      .eq('estimate_id', id)
+      .order('sort_order', { ascending: true });
+    est.lineItems = lineItems || [];
+    return est;
+  },
+  async create(estimate, lineItems = []) {
+    if (!estimate.id) estimate.id = generateId('EST');
+    const { data: estData, error } = await supabase.from('estimates').insert(estimate).select().single();
+    if (error) throw error;
+    if (lineItems.length > 0) {
+      const rows = lineItems.map((li, i) => ({
+        estimate_id: estData.id,
+        description: li.description,
+        quantity: li.quantity || 1,
+        unit_cost: li.unitCost || 0,
+        total: li.total || (li.quantity * li.unitCost) || 0,
+        sort_order: i,
+      }));
+      await insertMany('estimate_line_items', rows);
+    }
+    return estData;
+  },
+  async updateStatus(id, status) {
+    return updateRow('estimates', id, { status });
   },
 };

@@ -1,7 +1,7 @@
 import { useState, useMemo } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { ArrowLeft, Plus, X, Save, Send, FileText, Loader2, Database, HardDrive, DollarSign, Calculator, HardHat } from 'lucide-react';
-import { clients as mockClients, projects as mockProjects, invoices as mockInvoices } from '../data/mockData';
+import { clients as mockClients, projects as mockProjects, invoices as mockInvoices, contracts as mockContracts, changeOrders as mockChangeOrders } from '../data/mockData';
 import { invoiceService, clientService, projectService } from '../services/supabaseService';
 import { useSupabase } from '../hooks/useSupabase';
 
@@ -14,6 +14,10 @@ const emptyLineItem = () => ({ description: '', scheduledValue: 0, previouslyCom
 
 export default function InvoiceCreate() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const preloadContractId = searchParams.get('contractId');
+  const preloadContract = preloadContractId ? mockContracts.find((c) => c.id === preloadContractId) : null;
+
   const { data: clients, usingMock: clientsMock } = useSupabase(clientService.list, mockClients);
   const { data: projectsList, usingMock: projectsMock } = useSupabase(projectService.list, mockProjects);
 
@@ -25,16 +29,46 @@ export default function InvoiceCreate() {
     return `INV-${String(Math.max(...allNumbers, 10) + 1).padStart(3, '0')}`;
   }, []);
 
+  // How many pay apps already exist for this contract — determines next app number
+  const existingAppCount = preloadContractId
+    ? mockInvoices.filter((i) => i.contractId === preloadContractId).length
+    : 0;
+
+  // Auto-calculate previous payments from prior invoices on the same contract
+  const autoPreviousPayments = preloadContractId
+    ? mockInvoices.filter((i) => i.contractId === preloadContractId).reduce((sum, i) => sum + (i.amount || 0), 0)
+    : 0;
+
+  // Pre-populate SOV line items from contract schedule of values
+  const initialLineItems = (() => {
+    if (!preloadContract) return [emptyLineItem()];
+    const priorInvoices = mockInvoices.filter((i) => i.contractId === preloadContractId);
+    return preloadContract.lineItems.map((li, idx) => {
+      const previouslyCompleted = priorInvoices.reduce((sum, inv) => {
+        const match = (inv.lineItems || []).find((a) => a.itemNo === idx + 1 || a.description === li.description);
+        return sum + (match ? (match.thisPeriod || 0) : 0);
+      }, 0);
+      return {
+        description: li.description,
+        scheduledValue: li.amount,
+        previouslyCompleted,
+        thisPeriod: 0,
+        materialsStored: 0,
+      };
+    });
+  })();
+
   // ── Invoice Header ──
   const [invoiceNumber, setInvoiceNumber] = useState(nextInvoiceNumber);
   const [issueDate, setIssueDate] = useState(todayStr());
+  const [periodTo, setPeriodTo] = useState(todayStr());
   const [dueDate, setDueDate] = useState(plus30());
   const [paymentTerms, setPaymentTerms] = useState('Net 30');
-  const [contractDate, setContractDate] = useState(minus30());
+  const [contractDate, setContractDate] = useState(preloadContract?.startDate || minus30());
 
   // ── Client & Project ──
-  const [clientId, setClientId] = useState('');
-  const [projectId, setProjectId] = useState('');
+  const [clientId, setClientId] = useState(preloadContract?.clientId || '');
+  const [projectId, setProjectId] = useState(preloadContract?.projectId || '');
 
   // ── Distribution & Subcontractor ──
   const [distributionOwner, setDistributionOwner] = useState(true);
@@ -44,11 +78,11 @@ export default function InvoiceCreate() {
   const [isSubcontractorVersion, setIsSubcontractorVersion] = useState(false);
 
   // ── G702 Contract Fields ──
-  const [originalContractSum, setOriginalContractSum] = useState('');
+  const [originalContractSum, setOriginalContractSum] = useState(preloadContract?.contractValue || '');
   const [netChangeOrders, setNetChangeOrders] = useState(0);
   const [retainagePercent, setRetainagePercent] = useState(2.5);
   const [storedMaterialsRetainage, setStoredMaterialsRetainage] = useState(0);
-  const [previousPayments, setPreviousPayments] = useState(0);
+  const [previousPayments, setPreviousPayments] = useState(autoPreviousPayments);
 
   // ── Change Order Summary (AIA G702 Format) ──
   const [coPrevAdditions, setCoPrevAdditions] = useState(0);
@@ -57,7 +91,7 @@ export default function InvoiceCreate() {
   const [coThisDeductions, setCoThisDeductions] = useState(0);
 
   // ── G703 Line Items (Schedule of Values) ──
-  const [lineItems, setLineItems] = useState([emptyLineItem()]);
+  const [lineItems, setLineItems] = useState(initialLineItems);
 
   // ── Notes ──
   const [notes, setNotes] = useState('');
@@ -120,6 +154,26 @@ export default function InvoiceCreate() {
   const addLineItem = () => setLineItems(prev => [...prev, emptyLineItem()]);
   const removeLineItem = (i) => { if (lineItems.length > 1) setLineItems(prev => prev.filter((_, idx) => idx !== i)); };
 
+  // Import approved change orders for this project as G703 line items
+  const importChangeOrders = () => {
+    const pid = projectId || preloadContract?.projectId;
+    if (!pid) return;
+    const cos = mockChangeOrders.filter((co) => co.projectId === pid && co.status === 'Approved');
+    if (!cos.length) { alert('No approved change orders found for this project.'); return; }
+    const coItems = cos.map((co) => ({
+      description: `${co.id}: ${co.description}`,
+      scheduledValue: co.amount,
+      previouslyCompleted: 0,
+      thisPeriod: co.amount,
+      materialsStored: 0,
+    }));
+    // Remove empty placeholder rows first, then append CO items
+    setLineItems(prev => {
+      const nonEmpty = prev.filter(li => li.description.trim() || li.scheduledValue);
+      return [...nonEmpty, ...coItems];
+    });
+  };
+
   // Payment terms → due date
   const handleTermsChange = (terms) => {
     setPaymentTerms(terms);
@@ -147,6 +201,7 @@ export default function InvoiceCreate() {
         project_name: project ? project.name : null,
         amount: currentPaymentDue,
         issue_date: issueDate,
+        period_to: periodTo,
         contract_date: contractDate,
         status,
         // Distribution & Subcontractor
@@ -230,6 +285,28 @@ export default function InvoiceCreate() {
         </div>
       </div>
 
+      {/* Contract banner — shown when launched from a contract */}
+      {preloadContract && (
+        <div style={{ padding: '0.875rem 1.25rem', marginBottom: '1.25rem', borderRadius: 8, background: '#fff5ef', border: '1px solid #fed7aa', display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <FileText size={16} style={{ color: '#f07030', flexShrink: 0 }} />
+            <span style={{ fontWeight: 700, color: '#92400e', fontSize: '0.875rem' }}>Billing against contract:</span>
+            <span style={{ fontWeight: 600, color: '#0f172a', fontSize: '0.875rem' }}>{preloadContract.title}</span>
+          </div>
+          <div style={{ display: 'flex', gap: '1.5rem', marginLeft: 'auto', flexWrap: 'wrap' }}>
+            <span style={{ fontSize: '0.8rem', color: '#64748b' }}>
+              <span style={{ fontWeight: 600 }}>Contract Value:</span> {new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 0 }).format(preloadContract.contractValue)}
+            </span>
+            <span style={{ fontSize: '0.8rem', color: '#64748b' }}>
+              <span style={{ fontWeight: 600 }}>Application #:</span> {existingAppCount + 1}
+            </span>
+            <span style={{ fontSize: '0.8rem', color: '#64748b' }}>
+              <span style={{ fontWeight: 600 }}>Type:</span> {preloadContract.type}
+            </span>
+          </div>
+        </div>
+      )}
+
       {submitError && (
         <div style={{ padding: '0.75rem 1rem', marginBottom: '1rem', borderRadius: 8, background: '#fef2f2', border: '1px solid #fecaca', color: '#991b1b', fontSize: '0.875rem' }}>
           {submitError}
@@ -280,9 +357,18 @@ export default function InvoiceCreate() {
             )}
 
             {/* Invoice Details Grid */}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '1rem' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr 1fr', gap: '1rem' }}>
               <div><label style={labelStyle}>Invoice Number</label><input className="input" value={invoiceNumber} onChange={e => setInvoiceNumber(e.target.value)} /></div>
-              <div><label style={labelStyle}>Period To (Issue Date)</label><input className="input" type="date" value={issueDate} onChange={e => setIssueDate(e.target.value)} /></div>
+              <div>
+                <label style={labelStyle}>Application Date</label>
+                <input className="input" type="date" value={issueDate} onChange={e => setIssueDate(e.target.value)} />
+                <span style={{ fontSize: '0.65rem', color: '#94a3b8', marginTop: 2, display: 'block' }}>Date submitted</span>
+              </div>
+              <div>
+                <label style={labelStyle}>Period To</label>
+                <input className="input" type="date" value={periodTo} onChange={e => setPeriodTo(e.target.value)} />
+                <span style={{ fontSize: '0.65rem', color: '#94a3b8', marginTop: 2, display: 'block' }}>End of billing period</span>
+              </div>
               <div><label style={labelStyle}>Payment Due</label><input className="input" type="date" value={dueDate} onChange={e => setDueDate(e.target.value)} /></div>
               <div><label style={labelStyle}>Contract Date</label><input className="input" type="date" value={contractDate} onChange={e => setContractDate(e.target.value)} /></div>
             </div>
@@ -355,9 +441,20 @@ export default function InvoiceCreate() {
               <div style={{ ...sectionTitle, marginBottom: 0, borderBottom: 'none', paddingBottom: 0 }}>
                 <Calculator size={16} /> Schedule of Values (G703 Line Items)
               </div>
-              <button onClick={addLineItem} style={{ background: 'none', border: '1px dashed #cbd5e1', color: '#64748b', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4, fontSize: '0.8rem', fontWeight: 500, padding: '6px 12px', borderRadius: 6 }}>
-                <Plus size={14} /> Add Line Item
-              </button>
+              <div style={{ display: 'flex', gap: 8 }}>
+                {(projectId || preloadContract?.projectId) && (
+                  <button
+                    onClick={importChangeOrders}
+                    style={{ background: 'none', border: '1px dashed #f59e0b', color: '#d97706', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4, fontSize: '0.8rem', fontWeight: 500, padding: '6px 12px', borderRadius: 6 }}
+                    title="Add approved change orders as G703 line items"
+                  >
+                    <Plus size={14} /> Import COs
+                  </button>
+                )}
+                <button onClick={addLineItem} style={{ background: 'none', border: '1px dashed #cbd5e1', color: '#64748b', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4, fontSize: '0.8rem', fontWeight: 500, padding: '6px 12px', borderRadius: 6 }}>
+                  <Plus size={14} /> Add Line Item
+                </button>
+              </div>
             </div>
 
             {/* Header */}

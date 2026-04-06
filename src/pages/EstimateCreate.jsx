@@ -1,7 +1,9 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, Plus, X, Save, Send } from 'lucide-react';
-import { clients } from '../data/mockData';
+import { ArrowLeft, Plus, X, Save, Send, Loader2 } from 'lucide-react';
+import { clients as mockClients } from '../data/mockData';
+import { estimateService, clientService } from '../services/supabaseService';
+import { useSupabase } from '../hooks/useSupabase';
 
 const formatCurrency = (amount) =>
   new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(amount);
@@ -13,6 +15,9 @@ export default function EstimateCreate() {
   const [clientId, setClientId] = useState('');
   const [projectName, setProjectName] = useState('');
   const [lineItems, setLineItems] = useState([emptyLineItem()]);
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState(null);
+  const { data: clients } = useSupabase(clientService.list, mockClients);
   const [taxRate] = useState(0);
 
   const updateLineItem = (index, field, value) => {
@@ -37,10 +42,36 @@ export default function EstimateCreate() {
   const taxAmount = subtotal * (taxRate / 100);
   const grandTotal = subtotal + taxAmount;
 
-  const handleSave = (asDraft) => {
+  const handleSave = async (asDraft) => {
+    setSubmitting(true);
+    setSubmitError(null);
     const status = asDraft ? 'Draft' : 'Sent';
-    alert(`Estimate saved as "${status}" (UI only). Grand Total: ${formatCurrency(grandTotal)}`);
-    navigate('/estimates');
+    const today = new Date().toISOString().split('T')[0];
+    const client = clients.find((c) => c.id === clientId);
+    const estimateRow = {
+      client_id: clientId || null,
+      client_name: client ? `${client.company || client.name}` : null,
+      project_name: projectName,
+      total_amount: grandTotal,
+      subtotal,
+      tax: taxAmount,
+      status,
+      estimate_date: today,
+      valid_until: new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0],
+    };
+    const sovRows = lineItems.filter((li) => li.description.trim()).map((li) => ({
+      description: li.description,
+      quantity: parseFloat(li.quantity) || 1,
+      unitCost: parseFloat(li.unitCost) || 0,
+      total: lineTotal(li),
+    }));
+    try {
+      await estimateService.create(estimateRow, sovRows);
+      navigate('/estimates');
+    } catch (err) {
+      setSubmitError(err.message || 'Failed to save estimate.');
+      setSubmitting(false);
+    }
   };
 
   const labelStyle = { display: 'block', fontSize: '0.75rem', fontWeight: 600, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.375rem' };
@@ -59,15 +90,21 @@ export default function EstimateCreate() {
           <h1 className="page-title">Create New Estimate</h1>
         </div>
         <div style={{ display: 'flex', gap: '0.75rem' }}>
-          <button className="btn-secondary" onClick={() => handleSave(true)}>
-            <Save size={16} /> Save as Draft
+          <button className="btn-secondary" onClick={() => handleSave(true)} disabled={submitting}>
+            {submitting ? <Loader2 size={15} style={{ animation: 'spin 1s linear infinite' }} /> : <Save size={16} />} Save as Draft
           </button>
-          <button className="btn-primary" onClick={() => handleSave(false)}>
-            <Send size={16} /> Send
+          <button className="btn-primary" onClick={() => handleSave(false)} disabled={submitting}>
+            {submitting ? <Loader2 size={15} style={{ animation: 'spin 1s linear infinite' }} /> : <Send size={16} />} Send
           </button>
         </div>
       </div>
 
+      <style>{`@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}`}</style>
+      {submitError && (
+        <div style={{ padding: '0.75rem 1rem', marginBottom: '1rem', borderRadius: 8, background: '#fef2f2', border: '1px solid #fecaca', color: '#991b1b', fontSize: '0.875rem' }}>
+          {submitError}
+        </div>
+      )}
       {/* Form Card */}
       <div className="card" style={{ padding: '2rem', maxWidth: '950px' }}>
         {/* Client & Project */}
