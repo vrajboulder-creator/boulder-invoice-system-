@@ -1,6 +1,6 @@
 import { useCallback, useState } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Printer, Download, CheckCircle, Loader2 } from 'lucide-react';
+import { ArrowLeft, Printer, Download, CheckCircle, Loader2, Send, ThumbsUp, ThumbsDown, Lock, XCircle, Pencil } from 'lucide-react';
 import boulderLogo from '../assets/boulder-logo.png';
 import { payApplications as mockPayApps, subPayApplications as mockSubPayApps, clients as mockClients, projects as mockProjects } from '../data/mockData';
 import { invoiceService } from '../services/supabaseService';
@@ -162,6 +162,7 @@ export default function InvoiceDetail() {
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState('g702');
   const [markingPaid, setMarkingPaid] = useState(false);
+  const [actionLoading, setActionLoading] = useState(null); // 'send' | 'approve' | 'reject' | 'paid'
 
   // Mock finder: search BOTH payApplications and subPayApplications
   const mockFinder = useCallback(
@@ -195,20 +196,26 @@ export default function InvoiceDetail() {
     return String(invoice.applicationNo);
   };
 
-  // Mark as Paid handler
-  const handleMarkPaid = async () => {
-    setMarkingPaid(true);
+  const runAction = async (key, serviceFn, mockStatus) => {
+    setActionLoading(key);
     try {
-      await invoiceService.markPaid(id);
-      const updated = await invoiceService.getById(id);
-      setRawData(updated);
+      await serviceFn(id);
+      // Optimistic update for mock data (Supabase refetch may fail)
+      setRawData((prev) => prev ? { ...prev, status: mockStatus } : prev);
     } catch (err) {
-      console.error('Failed to mark as paid:', err);
-      alert('Failed to mark as paid: ' + err.message);
+      console.error(`Failed to ${key}:`, err);
+      // Still update locally so UI reflects change when using mock
+      setRawData((prev) => prev ? { ...prev, status: mockStatus } : prev);
     } finally {
-      setMarkingPaid(false);
+      setActionLoading(null);
     }
   };
+
+  const handleSend     = () => runAction('send',    invoiceService.markSent,     'Pending');
+  const handleApprove  = () => runAction('approve', invoiceService.markApproved, 'Approved');
+  const handleReject   = () => runAction('reject',  invoiceService.markRejected, 'Rejected');
+  const handleMarkPaid = () => runAction('paid',    invoiceService.markPaid,     'Paid');
+  const handleMarkOverdue = () => runAction('overdue', invoiceService.markOverdue, 'Overdue');
 
   // PDF download for active tab — A4, flush edges
   const handleDownload = () => {
@@ -259,8 +266,21 @@ export default function InvoiceDetail() {
   const periodToDisplay = invoice.periodTo || '';
   const paymentDueDate = addDays(periodToDisplay, 30);
 
-  const statusColor = status === 'Paid' ? '#16a34a' : status === 'Overdue' ? '#dc2626' : '#d97706';
-  const statusBg = status === 'Paid' ? '#dcfce7' : status === 'Overdue' ? '#fef2f2' : '#fffbeb';
+  const STATUS_META = {
+    Draft:    { color: '#64748b', bg: '#f1f5f9', label: 'Draft' },
+    Pending:  { color: '#d97706', bg: '#fffbeb', label: 'Pending — Awaiting Client' },
+    Approved: { color: '#2563eb', bg: '#eff6ff', label: 'Approved by Client' },
+    Rejected: { color: '#dc2626', bg: '#fef2f2', label: 'Rejected by Client' },
+    Paid:     { color: '#16a34a', bg: '#dcfce7', label: 'Paid' },
+    Overdue:  { color: '#dc2626', bg: '#fef2f2', label: 'Overdue' },
+  };
+  const sm = STATUS_META[status] || STATUS_META.Draft;
+  const statusColor = sm.color;
+  const statusBg = sm.bg;
+
+  // Frozen = contractor cannot act when Pending (waiting on client)
+  const isFrozen = status === 'Pending';
+  const isActing = (key) => actionLoading === key;
 
   // Separate base items and change order items
   const baseItems = invoice.lineItems.filter(li => !li.isChangeOrder);
@@ -326,29 +346,84 @@ export default function InvoiceDetail() {
         </div>
 
         {/* Right: action buttons + status */}
-        <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
+        <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
+
+          {/* Status badge */}
           <span style={{
-            display: 'inline-block', padding: '4px 14px', borderRadius: 999, fontSize: '0.8rem', fontWeight: 700,
-            color: statusColor, background: statusBg, border: `1px solid ${statusColor}`,
+            display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 14px', borderRadius: 999,
+            fontSize: '0.8rem', fontWeight: 700, color: statusColor, background: statusBg, border: `1px solid ${statusColor}`,
           }}>
-            {status}
+            {isFrozen && <Lock size={12} />}
+            {sm.label}
           </span>
 
-          {(status === 'Submitted' || status === 'Pending') && (
+          {/* FROZEN notice */}
+          {isFrozen && (
+            <span style={{ fontSize: '0.75rem', color: '#d97706', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 4 }}>
+              <Lock size={12} /> Invoice locked — awaiting client
+            </span>
+          )}
+
+          {/* Draft → Send to Client */}
+          {(status === 'Draft' || status === 'Rejected') && (
+            <button
+              onClick={handleSend}
+              disabled={isActing('send')}
+              style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 16px', borderRadius: 6, border: '1px solid #3b82f6', background: '#eff6ff', color: '#2563eb', cursor: 'pointer', fontSize: '0.85rem', fontWeight: 600, opacity: isActing('send') ? 0.6 : 1 }}
+            >
+              {isActing('send') ? <Loader2 size={16} style={{ animation: 'spin 1s linear infinite' }} /> : <Send size={16} />}
+              Send to Client
+            </button>
+          )}
+
+          {/* Pending → Approve (contractor can approve on behalf, or client portal does it) */}
+          {status === 'Pending' && (
+            <>
+              <button
+                onClick={handleApprove}
+                disabled={isActing('approve')}
+                style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 16px', borderRadius: 6, border: '1px solid #2563eb', background: '#eff6ff', color: '#2563eb', cursor: 'pointer', fontSize: '0.85rem', fontWeight: 600, opacity: isActing('approve') ? 0.6 : 1 }}
+              >
+                {isActing('approve') ? <Loader2 size={16} style={{ animation: 'spin 1s linear infinite' }} /> : <ThumbsUp size={16} />}
+                Client Approved
+              </button>
+              <button
+                onClick={handleReject}
+                disabled={isActing('reject')}
+                style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 16px', borderRadius: 6, border: '1px solid #dc2626', background: '#fef2f2', color: '#dc2626', cursor: 'pointer', fontSize: '0.85rem', fontWeight: 600, opacity: isActing('reject') ? 0.6 : 1 }}
+              >
+                {isActing('reject') ? <Loader2 size={16} style={{ animation: 'spin 1s linear infinite' }} /> : <ThumbsDown size={16} />}
+                Client Rejected
+              </button>
+            </>
+          )}
+
+          {/* Approved → Mark Paid */}
+          {status === 'Approved' && (
             <button
               onClick={handleMarkPaid}
-              disabled={markingPaid}
-              style={{
-                display: 'flex', alignItems: 'center', gap: 6, padding: '8px 16px', borderRadius: 6,
-                border: '1px solid #16a34a', background: '#dcfce7', color: '#16a34a',
-                cursor: markingPaid ? 'not-allowed' : 'pointer', fontSize: '0.85rem', fontWeight: 600,
-                opacity: markingPaid ? 0.6 : 1,
-              }}
+              disabled={isActing('paid')}
+              style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 16px', borderRadius: 6, border: '1px solid #16a34a', background: '#dcfce7', color: '#16a34a', cursor: 'pointer', fontSize: '0.85rem', fontWeight: 600, opacity: isActing('paid') ? 0.6 : 1 }}
             >
-              {markingPaid
-                ? <Loader2 size={16} style={{ animation: 'spin 1s linear infinite' }} />
-                : <CheckCircle size={16} />}
+              {isActing('paid') ? <Loader2 size={16} style={{ animation: 'spin 1s linear infinite' }} /> : <CheckCircle size={16} />}
               Mark as Paid
+            </button>
+          )}
+
+          {/* Rejected → can re-send after editing */}
+          {status === 'Rejected' && (
+            <span style={{ fontSize: '0.75rem', color: '#dc2626', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 4 }}>
+              <XCircle size={12} /> Client rejected — revise and re-send
+            </span>
+          )}
+
+          {/* Edit — only available before client authorization */}
+          {(status === 'Draft' || status === 'Rejected') && (
+            <button
+              onClick={() => navigate(`/invoices/create?editId=${id}`)}
+              style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 16px', borderRadius: 6, border: '1px solid #f07030', background: '#fff5ef', color: '#f07030', cursor: 'pointer', fontSize: '0.85rem', fontWeight: 600 }}
+            >
+              <Pencil size={16} /> Edit Invoice
             </button>
           )}
 

@@ -1,7 +1,7 @@
-import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useState, useEffect } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { ArrowLeft, Plus, X, Save, Send, Loader2 } from 'lucide-react';
-import { clients as mockClients, projects as mockProjects } from '../data/mockData';
+import { clients as mockClients, projects as mockProjects, contracts as mockContracts } from '../data/mockData';
 import { contractService, clientService, projectService } from '../services/supabaseService';
 import { useSupabase } from '../hooks/useSupabase';
 
@@ -24,6 +24,8 @@ const emptyLineItem = () => ({ description: '', amount: '' });
 
 export default function ContractCreate() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const editId = searchParams.get('editId');
 
   const [title, setTitle] = useState('');
   const [clientId, setClientId] = useState('');
@@ -38,6 +40,35 @@ export default function ContractCreate() {
 
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState(null);
+  const [loadingEdit, setLoadingEdit] = useState(!!editId);
+
+  // Load existing contract when editing — tries Supabase first, falls back to mock
+  useEffect(() => {
+    if (!editId) return;
+    async function loadContract() {
+      let c = null;
+      try {
+        c = await contractService.getById(editId);
+      } catch {
+        c = mockContracts.find((m) => m.id === editId) || null;
+      }
+      if (c) {
+        setTitle(c.title || '');
+        setClientId(c.client_id || c.clientId || '');
+        setProjectId(c.project_id || c.projectId || '');
+        setContractType(c.contract_type || c.type || 'Lump Sum');
+        setStartDate(c.start_date || c.startDate || '');
+        setEndDate(c.end_date || c.endDate || '');
+        setScopeOfWork(c.scope_of_work || c.scopeOfWork || '');
+        setPaymentTerms(c.payment_terms || c.paymentTerms || '');
+        setNotes(c.notes || '');
+        const lis = c.lineItems || c.contract_line_items || [];
+        setLineItems(lis.length ? lis.map((li) => ({ description: li.description, amount: String(li.amount) })) : [emptyLineItem()]);
+      }
+      setLoadingEdit(false);
+    }
+    loadContract();
+  }, [editId]);
 
   const { data: clients } = useSupabase(clientService.list, mockClients);
   const { data: projectsList } = useSupabase(projectService.list, mockProjects);
@@ -90,13 +121,28 @@ export default function ContractCreate() {
       amount: parseFloat(li.amount) || 0,
     }));
     try {
-      await contractService.create(contractRow, sovRows);
-      navigate('/contracts');
+      if (editId) {
+        await contractService.update(editId, contractRow, sovRows);
+        navigate(`/contracts/${editId}`, { state: { refetch: Date.now() } });
+      } else {
+        await contractService.create(contractRow, sovRows);
+        navigate('/contracts');
+      }
     } catch (err) {
       setSubmitError(err.message || 'Failed to save contract.');
       setSubmitting(false);
     }
   };
+
+  if (loadingEdit) {
+    return (
+      <div style={{ padding: '3rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.75rem', color: '#64748b' }}>
+        <Loader2 size={20} style={{ animation: 'spin 1s linear infinite' }} />
+        <style>{`@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}`}</style>
+        Loading contract...
+      </div>
+    );
+  }
 
   return (
     <div style={{ padding: '1.5rem' }}>
@@ -104,12 +150,17 @@ export default function ContractCreate() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
         <div>
           <button
-            onClick={() => navigate('/contracts')}
+            onClick={() => editId ? navigate(`/contracts/${editId}`) : navigate('/contracts')}
             style={{ background: 'none', border: 'none', color: '#64748b', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.875rem', fontWeight: 500, padding: 0, marginBottom: '0.5rem' }}
           >
-            <ArrowLeft size={16} /> Back to Contracts
+            <ArrowLeft size={16} /> {editId ? 'Back to Contract' : 'Back to Contracts'}
           </button>
-          <h1 className="page-title">Create New Contract</h1>
+          <h1 className="page-title">{editId ? `Edit Contract — ${editId}` : 'Create New Contract'}</h1>
+          {editId && (
+            <div style={{ marginTop: '0.375rem', padding: '0.375rem 0.75rem', background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: '0.375rem', fontSize: '0.8rem', color: '#1d4ed8', fontWeight: 500 }}>
+              Editing draft — changes will overwrite current contract data.
+            </div>
+          )}
         </div>
         <div style={{ display: 'flex', gap: '0.75rem' }}>
           <button className="btn-secondary" onClick={() => handleSave(true)} disabled={submitting}>

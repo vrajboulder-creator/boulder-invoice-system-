@@ -63,6 +63,9 @@ export function useSupabaseById(fetchFn, id, mockFinder) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [tick, setTick] = useState(0);
+
+  const refetch = useCallback(() => setTick((t) => t + 1), []);
 
   useEffect(() => {
     let cancelled = false;
@@ -84,7 +87,7 @@ export function useSupabaseById(fetchFn, id, mockFinder) {
     }
     if (id) load();
     return () => { cancelled = true; };
-  }, [id]);
+  }, [id, tick]);
 
-  return { data, loading, error, setData };
+  return { data, loading, error, setData, refetch };
 }

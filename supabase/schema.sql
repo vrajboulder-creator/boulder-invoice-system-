@@ -18,6 +18,8 @@ drop table if exists public.invoice_line_items cascade;
 drop table if exists public.invoices cascade;
 drop table if exists public.estimate_line_items cascade;
 drop table if exists public.estimates cascade;
+drop table if exists public.contract_line_items cascade;
+drop table if exists public.contracts cascade;
 drop table if exists public.documents cascade;
 drop table if exists public.timesheet_entries cascade;
 drop table if exists public.daily_logs cascade;
@@ -306,6 +308,8 @@ create table public.pay_applications (
   co_previous_deductions numeric(14,2) default 0,
   co_this_month_additions numeric(14,2) default 0,
   co_this_month_deductions numeric(14,2) default 0,
+  client_id text,
+  contract_id text,
   created_at timestamptz default now(),
   updated_at timestamptz default now()
 );
@@ -418,6 +422,39 @@ create table public.job_costs (
   created_at timestamptz default now()
 );
 
+-- ── 26. CONTRACTS ────────────────────────────────────────────
+create table public.contracts (
+  id text primary key,
+  title text not null,
+  client_id text,
+  client_name text,
+  company text,
+  project_id text,
+  project_name text,
+  type text not null default 'Lump Sum',
+  contract_type text,
+  status text not null default 'Draft',
+  contract_value numeric(14,2) default 0,
+  start_date date,
+  end_date date,
+  signed_date date,
+  sent_date date,
+  scope_of_work text,
+  payment_terms text,
+  notes text,
+  created_at timestamptz default now(),
+  updated_at timestamptz default now()
+);
+
+-- ── 27. CONTRACT LINE ITEMS (SOV) ────────────────────────────
+create table public.contract_line_items (
+  id text primary key default 'CLI-' || substr(md5(random()::text), 1, 8),
+  contract_id text,
+  description text not null,
+  amount numeric(14,2) default 0,
+  sort_order integer default 0
+);
+
 
 -- ============================================================
 -- ROW LEVEL SECURITY (RLS)
@@ -447,6 +484,8 @@ alter table public.notifications enable row level security;
 alter table public.schedule_events enable row level security;
 alter table public.material_catalog enable row level security;
 alter table public.job_costs enable row level security;
+alter table public.contracts enable row level security;
+alter table public.contract_line_items enable row level security;
 
 -- Allow full access for anon/authenticated (development — tighten for production)
 create policy "anon_all" on public.users for all to anon using (true) with check (true);
@@ -499,6 +538,10 @@ create policy "anon_all" on public.material_catalog for all to anon using (true)
 create policy "auth_all" on public.material_catalog for all to authenticated using (true) with check (true);
 create policy "anon_all" on public.job_costs for all to anon using (true) with check (true);
 create policy "auth_all" on public.job_costs for all to authenticated using (true) with check (true);
+create policy "anon_all" on public.contracts for all to anon using (true) with check (true);
+create policy "auth_all" on public.contracts for all to authenticated using (true) with check (true);
+create policy "anon_all" on public.contract_line_items for all to anon using (true) with check (true);
+create policy "auth_all" on public.contract_line_items for all to authenticated using (true) with check (true);
 
 
 -- ============================================================
@@ -518,6 +561,12 @@ create index idx_change_orders_project on public.change_orders(project_id);
 create index idx_documents_project on public.documents(project_id);
 create index idx_schedule_events_project on public.schedule_events(project_id);
 create index idx_job_costs_project on public.job_costs(project_id);
+create index idx_contracts_client on public.contracts(client_id);
+create index idx_contracts_project on public.contracts(project_id);
+create index idx_contracts_status on public.contracts(status);
+create index idx_contract_line_items_contract on public.contract_line_items(contract_id);
+create index idx_pay_apps_client on public.pay_applications(client_id);
+create index idx_pay_apps_contract on public.pay_applications(contract_id);
 
 
 -- ============================================================
@@ -540,3 +589,4 @@ create trigger set_updated_at before update on public.subcontractors for each ro
 create trigger set_updated_at before update on public.change_orders for each row execute function public.update_updated_at();
 create trigger set_updated_at before update on public.pay_applications for each row execute function public.update_updated_at();
 create trigger set_updated_at before update on public.lien_waivers for each row execute function public.update_updated_at();
+create trigger set_updated_at before update on public.contracts for each row execute function public.update_updated_at();

@@ -210,8 +210,20 @@ export const invoiceService = {
     return updateRow('pay_applications', id, updates);
   },
 
+  async markSent(id) {
+    return updateRow('pay_applications', id, { status: 'Pending' }); // Sent → Pending (awaiting client)
+  },
+
+  async markApproved(id) {
+    return updateRow('pay_applications', id, { status: 'Approved' });
+  },
+
+  async markRejected(id) {
+    return updateRow('pay_applications', id, { status: 'Rejected' });
+  },
+
   async markPaid(id) {
-    return updateRow('pay_applications', id, { status: 'Paid' });
+    return updateRow('pay_applications', id, { status: 'Paid', paid_date: new Date().toISOString().split('T')[0] });
   },
 
   async markOverdue(id) {
@@ -453,6 +465,26 @@ export const contractService = {
   },
   async updateStatus(id, status, extra = {}) {
     return updateRow('contracts', id, { status, ...extra });
+  },
+  async update(id, contractRow, lineItems = []) {
+    const { error } = await supabase.from('contracts').update(contractRow).eq('id', id);
+    if (error) throw error;
+    // Replace all line items
+    await supabase.from('contract_line_items').delete().eq('contract_id', id);
+    if (lineItems.length > 0) {
+      const rows = lineItems.map((li, i) => ({
+        contract_id: id,
+        description: li.description,
+        amount: li.amount,
+        sort_order: i,
+      }));
+      await insertMany('contract_line_items', rows);
+    }
+  },
+  async delete(id) {
+    await supabase.from('contract_line_items').delete().eq('contract_id', id);
+    const { error } = await supabase.from('contracts').delete().eq('id', id);
+    if (error) throw error;
   },
 };
 

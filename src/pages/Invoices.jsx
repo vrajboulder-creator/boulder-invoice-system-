@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Plus, DollarSign, TrendingUp, AlertCircle, FileText, CheckCircle, Clock, Loader2, Database, HardDrive, Search } from 'lucide-react';
+import { Plus, DollarSign, TrendingUp, AlertCircle, FileText, CheckCircle, Clock, Loader2, Database, HardDrive, Search, Lock } from 'lucide-react';
 import { invoices as mockInvoiceData, clients as mockClients, projects as mockProjects, contracts as mockContracts } from '../data/mockData';
 import { invoiceService } from '../services/supabaseService';
 import { useSupabase } from '../hooks/useSupabase';
@@ -10,10 +10,12 @@ const formatCurrency = (amount) =>
 
 const statusBadge = (status) => {
   const map = {
-    Paid: 'badge-green',
-    Pending: 'badge-amber',
-    Overdue: 'badge-red',
-    Draft: 'badge-gray',
+    Draft:    'badge-gray',
+    Pending:  'badge-amber',
+    Approved: 'badge-blue',
+    Rejected: 'badge-red',
+    Paid:     'badge-green',
+    Overdue:  'badge-red',
   };
   return map[status] || 'badge-gray';
 };
@@ -445,7 +447,8 @@ export default function Invoices() {
                           >
                             View
                           </Link>
-                          {(status === 'Pending' || status === 'Overdue') && (
+                          {/* Only Approved invoices can be marked Paid — Pending is frozen */}
+                          {status === 'Approved' && (
                             <button
                               onClick={(e) => { e.stopPropagation(); handleMarkPaid(invId); }}
                               disabled={isActing}
@@ -460,6 +463,12 @@ export default function Invoices() {
                               {isActing ? <Loader2 size={12} style={{ animation: 'spin 1s linear infinite' }} /> : <CheckCircle size={12} />}
                               Paid
                             </button>
+                          )}
+                          {/* Pending = frozen, show lock icon only */}
+                          {status === 'Pending' && (
+                            <span style={{ fontSize: '0.7rem', color: '#d97706', display: 'flex', alignItems: 'center', gap: 3 }}>
+                              <Lock size={10} /> Frozen
+                            </span>
                           )}
                           {isPastDue(inv) && (
                             <button

@@ -39,7 +39,7 @@ export default function Contracts() {
     return matchSearch && matchStatus;
   });
 
-  const totalValue = filtered.reduce((sum, c) => sum + c.contractValue, 0);
+  const totalValue = filtered.reduce((sum, c) => sum + (c.contract_value ?? c.contractValue ?? 0), 0);
   const signedCount = contracts.filter((c) => c.status === 'Signed').length;
   const draftCount = contracts.filter((c) => c.status === 'Draft').length;
   const sentCount = contracts.filter((c) => c.status === 'Sent').length;
@@ -64,7 +64,7 @@ export default function Contracts() {
       {/* Stats */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '1rem', marginBottom: '1.5rem' }}>
         {[
-          { label: 'Total Contract Value', value: formatCurrency(contracts.reduce((s, c) => s + c.contractValue, 0)), icon: DollarSign, color: '#3b82f6' },
+          { label: 'Total Contract Value', value: formatCurrency(contracts.reduce((s, c) => s + (c.contract_value ?? c.contractValue ?? 0), 0)), icon: DollarSign, color: '#3b82f6' },
           { label: 'Signed Contracts', value: signedCount, icon: FileSignature, color: '#059669' },
           { label: 'Awaiting Signature', value: sentCount, icon: Calendar, color: '#d97706' },
           { label: 'Drafts', value: draftCount, icon: Building2, color: '#64748b' },
@@ -156,12 +156,12 @@ export default function Contracts() {
                     <span style={{ color: '#475569', fontSize: '0.875rem' }}>{c.project}</span>
                   </td>
                   <td style={{ padding: '1rem' }}>
-                    <span style={{ ...(TYPE_STYLE[c.type] || { background: '#f1f5f9', color: '#64748b' }), padding: '0.2rem 0.6rem', borderRadius: '0.375rem', fontSize: '0.75rem', fontWeight: 600 }}>
-                      {c.type}
+                    <span style={{ ...(TYPE_STYLE[c.contract_type || c.type] || { background: '#f1f5f9', color: '#64748b' }), padding: '0.2rem 0.6rem', borderRadius: '0.375rem', fontSize: '0.75rem', fontWeight: 600 }}>
+                      {c.contract_type || c.type}
                     </span>
                   </td>
                   <td style={{ padding: '1rem', fontWeight: 700, color: '#0f172a', fontSize: '0.9rem' }}>
-                    {formatCurrency(c.contractValue)}
+                    {formatCurrency((c.contract_value ?? c.contractValue ?? 0))}
                   </td>
                   <td style={{ padding: '1rem' }}>
                     <span style={{ ...(STATUS_STYLE[c.status] || {}), padding: '0.25rem 0.75rem', borderRadius: '999px', fontSize: '0.75rem', fontWeight: 600 }}>
@@ -169,7 +169,7 @@ export default function Contracts() {
                     </span>
                   </td>
                   <td style={{ padding: '1rem', color: '#475569', fontSize: '0.875rem' }}>
-                    {c.signedDate || <span style={{ color: '#cbd5e1' }}>—</span>}
+                    {c.signed_date || c.signedDate || <span style={{ color: '#cbd5e1' }}>—</span>}
                   </td>
                 </tr>
               ))

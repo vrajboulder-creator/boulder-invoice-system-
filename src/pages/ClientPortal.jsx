@@ -11,8 +11,12 @@ import {
   CheckCircle2,
   Clock,
   AlertTriangle,
+  ThumbsUp,
+  ThumbsDown,
+  Lock,
 } from 'lucide-react';
 import { clients, projects, estimates, invoices } from '../data/mockData';
+import { invoiceService } from '../services/supabaseService';
 
 const CLIENT_ID = 'CLI-001';
 const client = clients.find((c) => c.id === CLIENT_ID);
@@ -53,12 +57,14 @@ const hardcodedMessages = [
 
 const statusBadge = (status) => {
   const styles = {
-    Paid: 'bg-emerald-100 text-emerald-700',
-    Pending: 'bg-amber-100 text-amber-700',
-    Overdue: 'bg-red-100 text-red-700',
+    Paid:     'bg-emerald-100 text-emerald-700',
+    Pending:  'bg-amber-100 text-amber-700',
+    Approved: 'bg-blue-100 text-blue-700',
+    Rejected: 'bg-red-100 text-red-700',
+    Overdue:  'bg-red-100 text-red-700',
     Accepted: 'bg-emerald-100 text-emerald-700',
-    Sent: 'bg-blue-100 text-blue-700',
-    Draft: 'bg-slate-100 text-slate-600',
+    Sent:     'bg-blue-100 text-blue-700',
+    Draft:    'bg-slate-100 text-slate-600',
     'In Progress': 'bg-blue-100 text-blue-700',
     Planning: 'bg-purple-100 text-purple-700',
     'On Hold': 'bg-amber-100 text-amber-700',
@@ -83,6 +89,25 @@ const formatCurrency = (n) =>
 export default function ClientPortal() {
   const [messageText, setMessageText] = useState('');
   const [messages, setMessages] = useState(hardcodedMessages);
+  // Local invoice statuses — client can approve/reject Pending invoices
+  const [invoiceStatuses, setInvoiceStatuses] = useState(
+    () => Object.fromEntries(clientInvoices.map((i) => [i.id, i.status]))
+  );
+  const [invoiceAction, setInvoiceAction] = useState(null); // id being acted on
+
+  const handleClientApprove = async (invId) => {
+    setInvoiceAction(invId + '_approve');
+    try { await invoiceService.markApproved(invId); } catch (_) {}
+    setInvoiceStatuses((prev) => ({ ...prev, [invId]: 'Approved' }));
+    setInvoiceAction(null);
+  };
+
+  const handleClientReject = async (invId) => {
+    setInvoiceAction(invId + '_reject');
+    try { await invoiceService.markRejected(invId); } catch (_) {}
+    setInvoiceStatuses((prev) => ({ ...prev, [invId]: 'Rejected' }));
+    setInvoiceAction(null);
+  };
 
   const handleSendMessage = (e) => {
     e.preventDefault();
@@ -220,24 +245,70 @@ export default function ClientPortal() {
                   <th className="text-left px-5 py-3 font-medium text-slate-600">Due Date</th>
                   <th className="text-right px-5 py-3 font-medium text-slate-600">Amount</th>
                   <th className="text-center px-5 py-3 font-medium text-slate-600">Status</th>
+                  <th className="text-left px-5 py-3 font-medium text-slate-600">Your Action</th>
                 </tr>
               </thead>
               <tbody>
-                {clientInvoices.map((inv) => (
-                  <tr key={inv.id} className="border-b border-slate-100 last:border-0">
-                    <td className="px-5 py-3">
-                      <div className="flex items-center gap-2">
-                        {statusIcon(inv.status)}
-                        <span className="font-medium text-slate-900">{inv.id}</span>
-                      </div>
-                    </td>
-                    <td className="px-5 py-3 text-slate-600">{inv.project}</td>
-                    <td className="px-5 py-3 text-slate-500">{inv.issueDate}</td>
-                    <td className="px-5 py-3 text-slate-500">{inv.dueDate}</td>
-                    <td className="px-5 py-3 text-right font-medium text-slate-900">{formatCurrency(inv.amount)}</td>
-                    <td className="px-5 py-3 text-center">{statusBadge(inv.status)}</td>
-                  </tr>
-                ))}
+                {clientInvoices.map((inv) => {
+                  const currentStatus = invoiceStatuses[inv.id] || inv.status;
+                  const actingApprove = invoiceAction === inv.id + '_approve';
+                  const actingReject  = invoiceAction === inv.id + '_reject';
+                  return (
+                    <tr key={inv.id} className="border-b border-slate-100 last:border-0">
+                      <td className="px-5 py-3">
+                        <div className="flex items-center gap-2">
+                          {statusIcon(currentStatus)}
+                          <span className="font-medium text-slate-900">{inv.id}</span>
+                        </div>
+                      </td>
+                      <td className="px-5 py-3 text-slate-600">{inv.project}</td>
+                      <td className="px-5 py-3 text-slate-500">{inv.issueDate}</td>
+                      <td className="px-5 py-3 text-slate-500">{inv.dueDate}</td>
+                      <td className="px-5 py-3 text-right font-medium text-slate-900">{formatCurrency(inv.amount)}</td>
+                      <td className="px-5 py-3 text-center">{statusBadge(currentStatus)}</td>
+                      <td className="px-5 py-3">
+                        {currentStatus === 'Pending' && (
+                          <div style={{ display: 'flex', gap: 6 }}>
+                            <button
+                              onClick={() => handleClientApprove(inv.id)}
+                              disabled={actingApprove}
+                              style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '4px 10px', borderRadius: 6, border: '1px solid #2563eb', background: '#eff6ff', color: '#2563eb', cursor: 'pointer', fontSize: '0.75rem', fontWeight: 600, opacity: actingApprove ? 0.6 : 1 }}
+                            >
+                              <ThumbsUp size={12} /> Approve
+                            </button>
+                            <button
+                              onClick={() => handleClientReject(inv.id)}
+                              disabled={actingReject}
+                              style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '4px 10px', borderRadius: 6, border: '1px solid #dc2626', background: '#fef2f2', color: '#dc2626', cursor: 'pointer', fontSize: '0.75rem', fontWeight: 600, opacity: actingReject ? 0.6 : 1 }}
+                            >
+                              <ThumbsDown size={12} /> Reject
+                            </button>
+                          </div>
+                        )}
+                        {currentStatus === 'Approved' && (
+                          <span style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: '0.75rem', color: '#2563eb', fontWeight: 600 }}>
+                            <CheckCircle2 size={12} /> Approved
+                          </span>
+                        )}
+                        {currentStatus === 'Rejected' && (
+                          <span style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: '0.75rem', color: '#dc2626', fontWeight: 600 }}>
+                            Rejected
+                          </span>
+                        )}
+                        {currentStatus === 'Paid' && (
+                          <span style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: '0.75rem', color: '#16a34a', fontWeight: 600 }}>
+                            <CheckCircle2 size={12} /> Paid
+                          </span>
+                        )}
+                        {(currentStatus === 'Draft' || currentStatus === 'Overdue') && (
+                          <span style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: '0.75rem', color: '#94a3b8' }}>
+                            <Lock size={12} /> No action
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

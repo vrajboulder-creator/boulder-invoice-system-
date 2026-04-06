@@ -18,6 +18,10 @@ export default function InvoiceCreate() {
   const preloadContractId = searchParams.get('contractId');
   const preloadContract = preloadContractId ? mockContracts.find((c) => c.id === preloadContractId) : null;
 
+  // Edit mode — load existing Draft/Rejected invoice
+  const editId = searchParams.get('editId');
+  const editInvoice = editId ? mockInvoices.find((i) => i.id === editId) : null;
+
   const { data: clients, usingMock: clientsMock } = useSupabase(clientService.list, mockClients);
   const { data: projectsList, usingMock: projectsMock } = useSupabase(projectService.list, mockProjects);
 
@@ -39,8 +43,18 @@ export default function InvoiceCreate() {
     ? mockInvoices.filter((i) => i.contractId === preloadContractId).reduce((sum, i) => sum + (i.amount || 0), 0)
     : 0;
 
-  // Pre-populate SOV line items from contract schedule of values
+  // Pre-populate SOV line items — from edit invoice, contract, or blank
   const initialLineItems = (() => {
+    // Edit mode: restore existing line items
+    if (editInvoice?.lineItems?.length) {
+      return editInvoice.lineItems.map((li) => ({
+        description: li.description,
+        scheduledValue: li.scheduledValue ?? li.scheduled_value ?? 0,
+        previouslyCompleted: li.previousApplication ?? li.previously_completed ?? 0,
+        thisPeriod: li.thisPeriod ?? li.this_period ?? 0,
+        materialsStored: li.materialsStored ?? li.materials_stored ?? 0,
+      }));
+    }
     if (!preloadContract) return [emptyLineItem()];
     const priorInvoices = mockInvoices.filter((i) => i.contractId === preloadContractId);
     return preloadContract.lineItems.map((li, idx) => {
@@ -48,47 +62,41 @@ export default function InvoiceCreate() {
         const match = (inv.lineItems || []).find((a) => a.itemNo === idx + 1 || a.description === li.description);
         return sum + (match ? (match.thisPeriod || 0) : 0);
       }, 0);
-      return {
-        description: li.description,
-        scheduledValue: li.amount,
-        previouslyCompleted,
-        thisPeriod: 0,
-        materialsStored: 0,
-      };
+      return { description: li.description, scheduledValue: li.amount, previouslyCompleted, thisPeriod: 0, materialsStored: 0 };
     });
   })();
 
   // ── Invoice Header ──
-  const [invoiceNumber, setInvoiceNumber] = useState(nextInvoiceNumber);
-  const [issueDate, setIssueDate] = useState(todayStr());
-  const [periodTo, setPeriodTo] = useState(todayStr());
-  const [dueDate, setDueDate] = useState(plus30());
-  const [paymentTerms, setPaymentTerms] = useState('Net 30');
-  const [contractDate, setContractDate] = useState(preloadContract?.startDate || minus30());
+  const [invoiceNumber, setInvoiceNumber] = useState(editInvoice?.id || nextInvoiceNumber);
+  const [issueDate, setIssueDate] = useState(editInvoice?.issueDate || editInvoice?.issue_date || todayStr());
+  const [periodTo, setPeriodTo] = useState(editInvoice?.periodTo || editInvoice?.period_to || todayStr());
+  const [dueDate, setDueDate] = useState(editInvoice?.dueDate || editInvoice?.due_date || plus30());
+  const [paymentTerms, setPaymentTerms] = useState(editInvoice?.terms || 'Net 30');
+  const [contractDate, setContractDate] = useState(editInvoice?.contractDate || editInvoice?.contract_date || preloadContract?.startDate || minus30());
 
   // ── Client & Project ──
-  const [clientId, setClientId] = useState(preloadContract?.clientId || '');
-  const [projectId, setProjectId] = useState(preloadContract?.projectId || '');
+  const [clientId, setClientId] = useState(editInvoice?.clientId || editInvoice?.client_id || preloadContract?.clientId || '');
+  const [projectId, setProjectId] = useState(editInvoice?.projectId || editInvoice?.project_id || preloadContract?.projectId || '');
 
   // ── Distribution & Subcontractor ──
-  const [distributionOwner, setDistributionOwner] = useState(true);
-  const [distributionArchitect, setDistributionArchitect] = useState(false);
-  const [distributionContractor, setDistributionContractor] = useState(false);
-  const [fromSubcontractor, setFromSubcontractor] = useState('');
-  const [isSubcontractorVersion, setIsSubcontractorVersion] = useState(false);
+  const [distributionOwner, setDistributionOwner] = useState(editInvoice?.distribution_owner ?? true);
+  const [distributionArchitect, setDistributionArchitect] = useState(editInvoice?.distribution_architect ?? false);
+  const [distributionContractor, setDistributionContractor] = useState(editInvoice?.distribution_contractor ?? false);
+  const [fromSubcontractor, setFromSubcontractor] = useState(editInvoice?.from_subcontractor || editInvoice?.fromSubcontractor || '');
+  const [isSubcontractorVersion, setIsSubcontractorVersion] = useState(editInvoice?.is_subcontractor_version ?? false);
 
   // ── G702 Contract Fields ──
-  const [originalContractSum, setOriginalContractSum] = useState(preloadContract?.contractValue || '');
-  const [netChangeOrders, setNetChangeOrders] = useState(0);
-  const [retainagePercent, setRetainagePercent] = useState(2.5);
+  const [originalContractSum, setOriginalContractSum] = useState(editInvoice?.originalContractSum || editInvoice?.original_contract_sum || preloadContract?.contractValue || '');
+  const [netChangeOrders, setNetChangeOrders] = useState(editInvoice?.netChangeOrders || editInvoice?.net_change_orders || 0);
+  const [retainagePercent, setRetainagePercent] = useState(editInvoice?.retainagePercent || editInvoice?.retainage_percent || 2.5);
   const [storedMaterialsRetainage, setStoredMaterialsRetainage] = useState(0);
-  const [previousPayments, setPreviousPayments] = useState(autoPreviousPayments);
+  const [previousPayments, setPreviousPayments] = useState(editInvoice ? (editInvoice.less_previous_certificates || editInvoice.previousPayments || 0) : autoPreviousPayments);
 
   // ── Change Order Summary (AIA G702 Format) ──
-  const [coPrevAdditions, setCoPrevAdditions] = useState(0);
-  const [coPrevDeductions, setCoPrevDeductions] = useState(0);
-  const [coThisAdditions, setCoThisAdditions] = useState(0);
-  const [coThisDeductions, setCoThisDeductions] = useState(0);
+  const [coPrevAdditions, setCoPrevAdditions] = useState(editInvoice?.co_previous_additions || 0);
+  const [coPrevDeductions, setCoPrevDeductions] = useState(editInvoice?.co_previous_deductions || 0);
+  const [coThisAdditions, setCoThisAdditions] = useState(editInvoice?.co_this_month_additions || 0);
+  const [coThisDeductions, setCoThisDeductions] = useState(editInvoice?.co_this_month_deductions || 0);
 
   // ── G703 Line Items (Schedule of Values) ──
   const [lineItems, setLineItems] = useState(initialLineItems);
@@ -241,8 +249,26 @@ export default function InvoiceCreate() {
         retainage: lineRetainage(li),
       }));
 
-      await invoiceService.create(invoiceRow, lineItemRows);
-      navigate('/invoices');
+      if (editId) {
+        // Edit mode — update existing invoice
+        await invoiceService.updateStatus(editId, status);
+        // Also update the pay app row fields via a generic update
+        try {
+          const { supabase } = await import('../lib/supabase');
+          await supabase.from('pay_applications').update(invoiceRow).eq('id', editId);
+          await supabase.from('pay_application_line_items').delete().eq('pay_application_id', editId);
+          if (lineItemRows.length > 0) {
+            const rows = lineItemRows.map((li, i) => ({ ...li, pay_application_id: editId, item_no: i + 1, sort_order: i }));
+            await supabase.from('pay_application_line_items').insert(rows);
+          }
+        } catch (_) {
+          // Mock mode — Supabase not connected, just navigate
+        }
+        navigate(`/invoices/${editId}`);
+      } else {
+        await invoiceService.create(invoiceRow, lineItemRows);
+        navigate('/invoices');
+      }
     } catch (err) {
       setSubmitError(err.message || 'Failed to save.');
     } finally {
@@ -266,7 +292,7 @@ export default function InvoiceCreate() {
           <button onClick={() => navigate('/invoices')} style={{ background: 'none', border: 'none', color: '#64748b', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.875rem', fontWeight: 500, padding: 0, marginBottom: 8 }}>
             <ArrowLeft size={16} /> Back to Invoices
           </button>
-          <h1 className="page-title">Create Application for Payment</h1>
+          <h1 className="page-title">{editInvoice ? `Edit Invoice — ${editInvoice.id}` : 'Create Application for Payment'}</h1>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <span style={{
@@ -284,6 +310,18 @@ export default function InvoiceCreate() {
           </button>
         </div>
       </div>
+
+      {/* Edit banner — shown when editing a rejected invoice */}
+      {editInvoice && (
+        <div style={{ padding: '0.875rem 1.25rem', marginBottom: '1.25rem', borderRadius: 8, background: editInvoice.status === 'Rejected' ? '#fef2f2' : '#eff6ff', border: `1px solid ${editInvoice.status === 'Rejected' ? '#fca5a5' : '#bfdbfe'}`, display: 'flex', alignItems: 'center', gap: '1rem' }}>
+          <span style={{ fontWeight: 700, color: editInvoice.status === 'Rejected' ? '#dc2626' : '#2563eb', fontSize: '0.875rem' }}>
+            {editInvoice.status === 'Rejected' ? '⚠ Client rejected this invoice — revise and re-send' : `Editing ${editInvoice.id}`}
+          </span>
+          <span style={{ fontSize: '0.8rem', color: '#64748b', marginLeft: 'auto' }}>
+            Original status: <strong>{editInvoice.status}</strong>
+          </span>
+        </div>
+      )}
 
       {/* Contract banner — shown when launched from a contract */}
       {preloadContract && (
