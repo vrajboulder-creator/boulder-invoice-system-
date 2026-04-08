@@ -17,9 +17,9 @@ export function useSupabase(fetchFn) {
     setError(null);
     try {
       const result = await fetchRef.current();
-      setData(result || []);
+      setData(Array.isArray(result) ? result : result ? [result] : []);
     } catch (err) {
-      console.error('Supabase fetch failed:', err.message);
+      console.error('Supabase fetch failed:', err?.message || err);
       setData([]);
       setError(err);
     } finally {
