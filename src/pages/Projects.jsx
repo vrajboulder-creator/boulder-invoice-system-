@@ -192,7 +192,7 @@ export default function Projects() {
 
               {/* Team Avatars */}
               <div className="flex items-center -space-x-2">
-                {project.team.map((member) => (
+                {(project.team || []).map((member) => (
                   <div
                     key={member}
                     className={`w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-medium ring-2 ring-white ${getInitialsColor(member)}`}
@@ -281,7 +281,7 @@ export default function Projects() {
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex items-center -space-x-2">
-                        {project.team.slice(0, 3).map((member) => (
+                        {(project.team || []).slice(0, 3).map((member) => (
                           <div
                             key={member}
                             className={`w-7 h-7 rounded-full flex items-center justify-center text-white text-[10px] font-medium ring-2 ring-white ${getInitialsColor(member)}`}
