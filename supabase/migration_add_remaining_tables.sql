@@ -230,6 +230,10 @@ ALTER TABLE public.app_projects ADD COLUMN IF NOT EXISTS budget numeric(14,2) de
 ALTER TABLE public.app_projects ADD COLUMN IF NOT EXISTS spent numeric(14,2) default 0;
 ALTER TABLE public.app_projects ADD COLUMN IF NOT EXISTS start_date date;
 ALTER TABLE public.app_projects ADD COLUMN IF NOT EXISTS deadline date;
+ALTER TABLE public.app_projects ADD COLUMN IF NOT EXISTS client_name text;
+ALTER TABLE public.app_projects ADD COLUMN IF NOT EXISTS contract_type text;
+ALTER TABLE public.app_projects ADD COLUMN IF NOT EXISTS team text[];
+ALTER TABLE public.app_projects ADD COLUMN IF NOT EXISTS phases text[];
 
 -- app_change_orders
 ALTER TABLE public.app_change_orders ADD COLUMN IF NOT EXISTS co_date date;

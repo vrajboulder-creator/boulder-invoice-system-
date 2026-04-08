@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import {
   ArrowLeft,
@@ -16,7 +16,7 @@ import {
   Presentation,
   HardHat,
 } from 'lucide-react';
-import { projectService, employeeService, documentService, changeOrderService } from '../services/supabaseService';
+import { projectService, employeeService, documentService, changeOrderService, invoiceService } from '../services/supabaseService';
 import { useSupabase, useSupabaseById } from '../hooks/useSupabase';
 
 const statusBadge = {
@@ -88,6 +88,7 @@ function fileIcon(type) {
 
 const tabs = [
   { key: 'overview', label: 'Overview', icon: BarChart3 },
+  { key: 'invoices', label: 'Invoices', icon: DollarSign },
   { key: 'tasks', label: 'Tasks', icon: ClipboardList },
   { key: 'files', label: 'Files', icon: FileText },
   { key: 'dailylog', label: 'Daily Log', icon: BookOpen },
@@ -101,6 +102,7 @@ export default function ProjectDetail() {
   const { data: employees } = useSupabase(employeeService.list);
   const { data: documents } = useSupabase(documentService.list);
   const { data: allChangeOrders } = useSupabase(changeOrderService.list);
+  const { data: allInvoices } = useSupabase(invoiceService.list);
 
   if (projectLoading) {
     return (
@@ -129,6 +131,7 @@ export default function ProjectDetail() {
 
   const projectDocs = documents.filter((d) => d.projectId === project.id || d.project_id === project.id);
   const projectCOs = allChangeOrders.filter((c) => c.projectId === project.id || c.project_id === project.id);
+  const projectInvoices = allInvoices.filter((i) => i.project_id === project.id || i.projectId === project.id);
 
   const budgetPct = Math.round((project.spent / project.budget) * 100);
 
@@ -230,6 +233,7 @@ export default function ProjectDetail() {
           projectCOs={projectCOs}
         />
       )}
+      {activeTab === 'invoices' && <InvoicesTab invoices={projectInvoices} projectId={project.id} />}
       {activeTab === 'tasks' && (
         <TasksTab tasksByPhase={tasksByPhase} />
       )}
@@ -521,6 +525,129 @@ function DailyLogTab({ logs }) {
           </p>
         </div>
       ))}
+    </div>
+  );
+}
+
+/* =================== INVOICES TAB =================== */
+function InvoicesTab({ invoices, projectId }) {
+  const invoiceStatusColor = {
+    Paid: '#059669', Approved: '#059669', Pending: '#d97706',
+    Overdue: '#dc2626', Draft: '#64748b', Submitted: '#3b82f6', Rejected: '#dc2626',
+  };
+
+  const totalBilled = invoices.reduce((s, i) => s + parseFloat(i.current_payment_due ?? i.amount ?? 0), 0);
+  const totalPaid = invoices.filter((i) => i.status === 'Paid').reduce((s, i) => s + parseFloat(i.current_payment_due ?? i.amount ?? 0), 0);
+  const totalOutstanding = totalBilled - totalPaid;
+
+  if (invoices.length === 0) {
+    return (
+      <div className="text-center py-12">
+        <DollarSign size={40} className="mx-auto text-gray-300 mb-3" />
+        <p className="text-gray-500 mb-4">No invoices for this project yet.</p>
+        <Link
+          to={`/invoices/create?projectId=${projectId}`}
+          className="inline-flex items-center gap-2 px-4 py-2 bg-orange-500 text-white rounded-lg text-sm font-semibold hover:bg-orange-600 transition"
+        >
+          + Create Invoice
+        </Link>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      {/* Summary cards */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="bg-white rounded-xl border border-gray-200 p-4">
+          <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1">Total Billed</p>
+          <p className="text-xl font-bold text-gray-900">{formatCurrency(totalBilled)}</p>
+          <p className="text-xs text-gray-500 mt-1">{invoices.length} invoice{invoices.length !== 1 ? 's' : ''}</p>
+        </div>
+        <div className="bg-white rounded-xl border border-gray-200 p-4">
+          <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1">Paid</p>
+          <p className="text-xl font-bold text-green-600">{formatCurrency(totalPaid)}</p>
+          <p className="text-xs text-gray-500 mt-1">{invoices.filter((i) => i.status === 'Paid').length} paid</p>
+        </div>
+        <div className="bg-white rounded-xl border border-gray-200 p-4">
+          <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1">Outstanding</p>
+          <p className="text-xl font-bold" style={{ color: totalOutstanding > 0 ? '#dc2626' : '#059669' }}>{formatCurrency(totalOutstanding)}</p>
+          <p className="text-xs text-gray-500 mt-1">{invoices.filter((i) => i.status === 'Pending' || i.status === 'Overdue').length} pending</p>
+        </div>
+      </div>
+
+      {/* Invoice table */}
+      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+        <div className="flex items-center justify-between px-5 py-3 border-b border-gray-100">
+          <h3 className="font-semibold text-gray-900 text-sm">Pay Applications</h3>
+          <Link
+            to={`/invoices/create?projectId=${projectId}`}
+            className="text-xs font-semibold text-orange-500 hover:text-orange-600"
+          >
+            + New Invoice
+          </Link>
+        </div>
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b border-gray-100 text-gray-500 text-xs uppercase tracking-wide">
+              <th className="text-left px-5 py-3 font-semibold">Invoice</th>
+              <th className="text-left px-5 py-3 font-semibold">Date</th>
+              <th className="text-left px-5 py-3 font-semibold">Contract</th>
+              <th className="text-right px-5 py-3 font-semibold">Amount</th>
+              <th className="text-center px-5 py-3 font-semibold">Status</th>
+              <th className="text-right px-5 py-3 font-semibold"></th>
+            </tr>
+          </thead>
+          <tbody>
+            {invoices.map((inv) => {
+              const amount = parseFloat(inv.current_payment_due ?? inv.amount ?? 0);
+              const date = inv.application_date || inv.period_to || inv.issue_date || '';
+              const contractId = inv.contract_id || inv.contractId || null;
+              const color = invoiceStatusColor[inv.status] || '#64748b';
+              return (
+                <tr key={inv.id} className="border-b border-gray-50 hover:bg-gray-50 transition">
+                  <td className="px-5 py-3">
+                    <Link to={`/invoices/${inv.id}`} className="font-semibold text-blue-600 hover:text-blue-800">
+                      {inv.id}
+                    </Link>
+                    {inv.application_no && (
+                      <span className="text-gray-400 text-xs ml-2">App #{inv.application_no}</span>
+                    )}
+                  </td>
+                  <td className="px-5 py-3 text-gray-600">
+                    {date ? new Date(date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—'}
+                  </td>
+                  <td className="px-5 py-3">
+                    {contractId ? (
+                      <Link to={`/contracts/${contractId}`} className="text-purple-600 font-medium text-xs hover:text-purple-800">
+                        {contractId}
+                      </Link>
+                    ) : (
+                      <span className="text-gray-400 text-xs">—</span>
+                    )}
+                  </td>
+                  <td className="px-5 py-3 text-right font-semibold text-gray-900">
+                    {formatCurrency(amount)}
+                  </td>
+                  <td className="px-5 py-3 text-center">
+                    <span
+                      className="text-xs font-bold px-2.5 py-1 rounded-full"
+                      style={{ background: color + '18', color }}
+                    >
+                      {inv.status}
+                    </span>
+                  </td>
+                  <td className="px-5 py-3 text-right">
+                    <Link to={`/invoices/${inv.id}`} className="text-xs font-semibold text-orange-500 hover:text-orange-600">
+                      View →
+                    </Link>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

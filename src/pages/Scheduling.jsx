@@ -164,10 +164,13 @@ function GanttView({ scheduleEvents }) {
   const days = Array.from({ length: daysInMonth }, (_, i) => i + 1);
 
   // Sort events by start date then by duration
-  const sortedEvents = [...scheduleEvents].sort((a, b) => {
-    if (a.date !== b.date) return a.date.localeCompare(b.date);
-    return a.endDate.localeCompare(b.endDate);
-  });
+  const sortedEvents = [...scheduleEvents]
+    .filter((e) => e.date)
+    .sort((a, b) => {
+      const ad = a.date || '', bd = b.date || '';
+      if (ad !== bd) return ad.localeCompare(bd);
+      return (a.endDate || a.end_date || ad).localeCompare(b.endDate || b.end_date || bd);
+    });
 
   return (
     <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
@@ -198,8 +201,8 @@ function GanttView({ scheduleEvents }) {
 
           {/* Event rows */}
           {sortedEvents.map((ev) => {
-            const startDay = Math.max(parseInt(ev.date.split('-')[2], 10), 1);
-            const endDay = Math.min(parseInt(ev.endDate.split('-')[2], 10), daysInMonth);
+            const startDay = Math.max(parseInt((ev.date || '').split('-')[2] || '1', 10), 1);
+            const endDay = Math.min(parseInt((ev.endDate || ev.end_date || ev.date || '').split('-')[2] || '1', 10), daysInMonth);
             const startOffset = ((startDay - 1) / daysInMonth) * 100;
             const barWidth = ((endDay - startDay + 1) / daysInMonth) * 100;
 
