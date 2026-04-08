@@ -81,7 +81,6 @@ export default function ProjectCreate() {
       name: projectName,
       client_id: clientId || null,
       client_name: client?.name || null,
-      client_company: client?.company || null,
       description,
       status,
       budget: parseFloat(budget) || 0,
