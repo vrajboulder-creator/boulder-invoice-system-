@@ -1,9 +1,8 @@
 import { useState } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { ArrowLeft, CheckCircle, XCircle, Clock, MessageSquare, Send, FolderKanban } from 'lucide-react';
-import { rfis as mockRfis, projects as mockProjects } from '../data/mockData';
-import { rfiService } from '../services/supabaseService';
-import { useSupabaseById } from '../hooks/useSupabase';
+import { rfiService, projectService } from '../services/supabaseService';
+import { useSupabase } from '../hooks/useSupabase';
 
 const STATUS_STYLE = {
   Open:      { background: '#fef3c7', color: '#d97706', border: '#fde68a' },
@@ -17,8 +16,10 @@ export default function RFIDetail() {
   const [response, setResponse] = useState('');
   const [saving, setSaving] = useState(false);
 
-  const mockFinder = (searchId) => mockRfis.find((r) => r.id === searchId) || null;
-  const { data: rfi, loading, setData } = useSupabaseById(rfiService.list, id, mockFinder);
+  const { data: rfis, loading, setData: setRfis } = useSupabase(rfiService.list);
+  const { data: projects } = useSupabase(projectService.list);
+  const rfi = rfis.find((r) => r.id === id) || null;
+  const setData = (updated) => setRfis(rfis.map((r) => r.id === id ? updated : r));
 
   if (loading) return <div style={{ padding: '2rem', color: '#94a3b8' }}>Loading...</div>;
   if (!rfi) return (
@@ -31,7 +32,7 @@ export default function RFIDetail() {
   );
 
   const st = STATUS_STYLE[rfi.status] || STATUS_STYLE.Open;
-  const project = mockProjects.find((p) => p.id === (rfi.projectId || rfi.project_id));
+  const project = projects.find((p) => p.id === (rfi.projectId || rfi.project_id));
   const subject = rfi.subject || rfi.rfi_subject;
   const submittedBy = rfi.submittedBy || rfi.submitted_by;
   const dateSubmitted = rfi.dateSubmitted || rfi.date_submitted;

@@ -19,7 +19,8 @@ import {
   Legend,
   ResponsiveContainer,
 } from 'recharts';
-import { jobCostData, materialCatalog, projects } from '../data/mockData';
+import { jobCostService, materialService, projectService } from '../services/supabaseService';
+import { useSupabase } from '../hooks/useSupabase';
 
 const formatCurrency = (value) =>
   new Intl.NumberFormat('en-US', {
@@ -70,8 +71,19 @@ const ChartTooltip = ({ active, payload, label }) => {
 };
 
 export default function JobCosting() {
-  const [selectedProjectId, setSelectedProjectId] = useState(jobCostData[0]?.projectId || '');
+  const { data: jobCostData } = useSupabase(jobCostService.list);
+  const { data: materialCatalog } = useSupabase(materialService.list);
+  const { data: projects } = useSupabase(projectService.list);
+
+  const [selectedProjectId, setSelectedProjectId] = useState('');
   const [materialSearch, setMaterialSearch] = useState('');
+
+  // Auto-select first project when data loads
+  React.useEffect(() => {
+    if (jobCostData.length > 0 && !selectedProjectId) {
+      setSelectedProjectId(jobCostData[0]?.projectId || '');
+    }
+  }, [jobCostData, selectedProjectId]);
 
   const selectedProject = useMemo(
     () => jobCostData.find((p) => p.projectId === selectedProjectId),

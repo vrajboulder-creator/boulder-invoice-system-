@@ -1,7 +1,6 @@
 import { useState, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { ArrowLeft, Printer, Download, FileDown, CheckCircle, Clock, Send, DollarSign, Shield, FileCheck, Loader2 } from 'lucide-react';
-import { payApplications, subPayApplications } from '../data/mockData.js';
 import { payAppService, lienWaiverService } from '../services/supabaseService';
 import { useSupabaseById } from '../hooks/useSupabase';
 import { downloadPdf } from '../utils/downloadPdf';
@@ -106,11 +105,6 @@ function normalizePayApp(raw) {
   return pa;
 }
 
-/* ── Mock data finder ───────────────────────────────────────── */
-function findMockPayApp(id) {
-  return payApplications.find((p) => p.id === id) || subPayApplications.find((p) => p.id === id) || null;
-}
-
 /* ════════════════════════════════════════════════════════════════
    MAIN COMPONENT
    ════════════════════════════════════════════════════════════════ */
@@ -121,12 +115,11 @@ export default function PayApplicationDetail() {
   const [actionLoading, setActionLoading] = useState(false);
   const [waiverLoading, setWaiverLoading] = useState(false);
 
-  // Memoize the fetch function and mock finder to prevent re-renders
+  // Memoize the fetch function to prevent re-renders
   const fetchFn = useCallback((payAppId) => payAppService.getById(payAppId), []);
-  const mockFinder = useCallback((payAppId) => findMockPayApp(payAppId), []);
 
-  // Fetch from Supabase with mock fallback
-  const { data: rawData, loading, setData } = useSupabaseById(fetchFn, id, mockFinder);
+  // Fetch from Supabase
+  const { data: rawData, loading, setData } = useSupabaseById(fetchFn, id);
 
   // Normalize the data (handles both Supabase and mock formats)
   const pa = normalizePayApp(rawData);

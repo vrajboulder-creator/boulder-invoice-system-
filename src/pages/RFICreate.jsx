@@ -1,8 +1,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ArrowLeft, Send, Upload, Loader2 } from 'lucide-react';
-import { projects as mockProjects, employees } from '../data/mockData';
-import { rfiService, projectService } from '../services/supabaseService';
+import { rfiService, projectService, employeeService } from '../services/supabaseService';
 import { useSupabase } from '../hooks/useSupabase';
 
 const labelStyle = { display: 'block', fontSize: '0.75rem', fontWeight: 600, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.375rem' };
@@ -19,8 +18,8 @@ export default function RFICreate() {
   const [submitting, setSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
 
-  // Fetch projects from Supabase with mock fallback
-  const { data: projectsList } = useSupabase(projectService.list, mockProjects);
+  const { data: projectsList } = useSupabase(projectService.list);
+  const { data: employeesList } = useSupabase(employeeService.list);
 
   // Auto-generate next RFI number
   const generateRfiNumber = () => {
@@ -36,7 +35,7 @@ export default function RFICreate() {
     setErrorMsg('');
 
     // Find selected employee name
-    const emp = employees.find(em => em.id === submittedBy);
+    const emp = employeesList.find(em => em.id === submittedBy);
     const submitterName = emp ? emp.name : submittedBy;
     const today = new Date().toISOString().split('T')[0];
 
@@ -130,7 +129,7 @@ export default function RFICreate() {
                 style={{ appearance: 'auto' }}
               >
                 <option value="">Select employee...</option>
-                {employees.map((emp) => (
+                {employeesList.map((emp) => (
                   <option key={emp.id} value={emp.id}>
                     {emp.name} — {emp.role}
                   </option>

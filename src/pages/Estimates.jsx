@@ -1,6 +1,5 @@
 import { Link } from 'react-router-dom';
 import { Plus, FileText } from 'lucide-react';
-import { estimates as mockEstimates } from '../data/mockData';
 import { estimateService } from '../services/supabaseService';
 import { useSupabase } from '../hooks/useSupabase';
 
@@ -18,7 +17,11 @@ const formatCurrency = (amount) =>
   new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(amount);
 
 export default function Estimates() {
-  const { data: estimates } = useSupabase(estimateService.list, mockEstimates);
+  const { data: estimates, loading } = useSupabase(estimateService.list);
+
+  if (loading) {
+    return <div style={{ padding: '2rem', textAlign: 'center', color: '#9ca3af' }}>Loading estimates...</div>;
+  }
 
   return (
     <div style={{ padding: '1.5rem' }}>
@@ -66,15 +69,15 @@ export default function Estimates() {
                     {est.id}
                   </Link>
                 </td>
-                <td className="table-cell" style={{ fontWeight: 500, color: '#1e293b' }}>{est.client}</td>
-                <td className="table-cell">{est.projectName}</td>
+                <td className="table-cell" style={{ fontWeight: 500, color: '#1e293b' }}>{est.client_name || est.client}</td>
+                <td className="table-cell">{est.project_name || est.projectName}</td>
                 <td className="table-cell" style={{ fontWeight: 600, color: '#1e293b' }}>
-                  {formatCurrency(est.totalAmount)}
+                  {formatCurrency(est.total_amount || est.totalAmount || 0)}
                 </td>
                 <td className="table-cell">
                   <span className={`badge ${statusBadge(est.status)}`}>{est.status}</span>
                 </td>
-                <td className="table-cell">{new Date(est.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</td>
+                <td className="table-cell">{new Date(est.estimate_date || est.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</td>
               </tr>
             ))}
           </tbody>

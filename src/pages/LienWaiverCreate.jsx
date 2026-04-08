@@ -1,19 +1,30 @@
-import { useState, useMemo } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useState, useMemo, useEffect } from 'react';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { ArrowLeft, Save, FileCheck, Eye } from 'lucide-react';
-import { lienWaiverService, projectService, payAppService } from '../services/supabaseService';
-import { useSupabase } from '../hooks/useSupabase';
-import { projects as mockProjects, clients as mockClients, payApplications as mockPayApps } from '../data/mockData';
+import { lienWaiverService, projectService, clientService, payAppService, invoiceService, contractService } from '../services/supabaseService';
+import { useSupabase, useSupabaseById } from '../hooks/useSupabase';
 
 const formatCurrency = (amount) =>
   new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2 }).format(amount);
 
 export default function LienWaiverCreate() {
   const navigate = useNavigate();
+  const { contractId: routeContractId, invoiceId: routeInvoiceId } = useParams();
+  const [searchParams] = useSearchParams();
+  const urlContractValue = parseFloat(searchParams.get('contractValue') || '0');
+  const urlTotalBilled = parseFloat(searchParams.get('totalBilled') || '0');
 
-  // Fetch projects and pay apps from Supabase with mock fallback
-  const { data: rawProjects } = useSupabase(projectService.list, mockProjects);
-  const { data: rawPayApps } = useSupabase(payAppService.list, mockPayApps);
+  // Fetch projects, clients, pay apps, and contracts from Supabase
+  const { data: rawProjects } = useSupabase(projectService.list);
+  const { data: rawClients } = useSupabase(clientService.list);
+  const { data: rawPayApps } = useSupabase(payAppService.list);
+  const { data: rawContracts } = useSupabase(contractService.list);
+
+  // If launched from a specific invoice, fetch it
+  const { data: linkedInvoice } = useSupabaseById(
+    invoiceService.getById,
+    routeInvoiceId || null,
+  );
 
   // Normalize projects
   const projectsList = useMemo(() => rawProjects.map((p) => ({
@@ -52,6 +63,56 @@ export default function LienWaiverCreate() {
   const [relatedPayApp, setRelatedPayApp] = useState('');
   const [saving, setSaving] = useState(false);
 
+  // Auto-populate form from linked invoice when navigated from contract → invoice → waiver
+  useEffect(() => {
+    if (!linkedInvoice) return;
+
+    // Compute net due — try stored field first, then compute from line items
+    const lineItems = linkedInvoice.pay_application_line_items || linkedInvoice.lineItems || [];
+    const computedThisPeriod = lineItems.reduce((s, li) => s + parseFloat(li.this_period ?? li.thisPeriod ?? 0), 0);
+    const computedRetainage  = lineItems.reduce((s, li) => s + parseFloat(li.retainage ?? 0), 0);
+    const computedNet = computedThisPeriod - computedRetainage;
+    const storedDue = parseFloat(linkedInvoice.current_payment_due ?? linkedInvoice.amount ?? 0);
+    const due = storedDue || computedNet || computedThisPeriod;
+
+    setRelatedPayApp(linkedInvoice.id);
+
+    // Determine Final vs Partial using LIVE contract data from Supabase
+    // (URL params are a fallback if contract data isn't loaded yet)
+    const cId = linkedInvoice.contract_id || routeContractId;
+    const contract = cId ? rawContracts.find((c) => c.id === cId) : null;
+    const liveContractValue = contract ? parseFloat(contract.contract_value ?? 0) : urlContractValue;
+
+    // Sum total completed (gross, before retainage) across all invoices on this contract
+    // Must use total_completed_and_stored, NOT current_payment_due (which is net after retainage)
+    let liveTotalBilled = urlTotalBilled;
+    if (contract && rawPayApps.length > 0) {
+      liveTotalBilled = rawPayApps
+        .filter((pa) => (pa.contract_id || pa.contractId) === cId)
+        .reduce((s, pa) => s + parseFloat(pa.total_completed_and_stored ?? pa.totalCompletedAndStored ?? pa.current_payment_due ?? 0), 0);
+    }
+
+    const remainingAfterThis = liveContractValue > 0 ? liveContractValue - liveTotalBilled : null;
+    const isFinal = remainingAfterThis !== null ? remainingAfterThis <= 0 : false;
+
+    if (isFinal) {
+      setWaiverCategory('Final');
+      const prevBilled = liveTotalBilled - due;
+      const finalAmt = liveContractValue > 0 ? Math.max(liveContractValue - prevBilled, due) : due;
+      setFinalBalance(String(finalAmt > 0 ? finalAmt : due));
+    } else {
+      setWaiverCategory('Partial');
+      setWaiverAmount(String(due));
+    }
+
+    const owner = linkedInvoice.owner_name || linkedInvoice.owner || linkedInvoice.client || '';
+    const addr  = linkedInvoice.owner_address || linkedInvoice.ownerAddress || '';
+    const projId = linkedInvoice.project_id || linkedInvoice.projectId || '';
+    if (owner)  setOwnerContractor(owner);
+    if (addr)   setJobNameAddress(addr);
+    if (projId) setProjectId(projId);
+  }, [linkedInvoice, rawContracts, rawPayApps, routeContractId, urlContractValue, urlTotalBilled]);
+
   // Auto-fill when project changes
   const handleProjectChange = (id) => {
     setProjectId(id);
@@ -59,8 +120,8 @@ export default function LienWaiverCreate() {
       const proj = projectsList.find((p) => p.id === id);
       if (proj) {
         setOwnerContractor(proj.client);
-        const client = mockClients.find((c) => c.id === proj.clientId);
-        const addr = client ? client.address : '';
+        const client = rawClients.find((c) => c.id === proj.clientId);
+        const addr = client ? (client.address || '') : '';
         setJobNameAddress(addr);
       }
     } else {
@@ -80,10 +141,27 @@ export default function LienWaiverCreate() {
     if (!payAppId) return;
     const pa = payAppsList.find((p) => p.id === payAppId);
     if (!pa) return;
-    const balance = parseFloat(pa.balanceToFinish) || 0;
     const paymentDue = parseFloat(pa.currentPaymentDue) || 0;
-    // Final waiver if nothing left to pay after this
-    if (balance <= 0) {
+
+    // Check contract-level: is total billed >= contract value?
+    const rawPa = rawPayApps.find((p) => p.id === payAppId);
+    const cId = rawPa?.contract_id || rawPa?.contractId || routeContractId;
+    const contract = cId ? rawContracts.find((c) => c.id === cId) : null;
+    let isFinal = false;
+    if (contract) {
+      const cv = parseFloat(contract.contract_value ?? 0);
+      const totalBilled = rawPayApps
+        .filter((p) => (p.contract_id || p.contractId) === cId)
+        .reduce((s, p) => s + parseFloat(p.total_completed_and_stored ?? p.totalCompletedAndStored ?? p.current_payment_due ?? 0), 0);
+      isFinal = cv > 0 && totalBilled >= cv;
+    }
+    // Fallback: also check balance_to_finish on the pay app itself
+    if (!isFinal) {
+      const balance = parseFloat(pa.balanceToFinish) || 0;
+      isFinal = balance <= 0;
+    }
+
+    if (isFinal) {
       setWaiverCategory('Final');
       setFinalBalance(String(paymentDue));
     } else {
@@ -108,7 +186,8 @@ export default function LienWaiverCreate() {
     condition_type: conditionType,
     project_id: projectId || null,
     project_name: selectedProjectName,
-    pay_application_id: relatedPayApp || null,
+    pay_application_id: relatedPayApp || routeInvoiceId || null,
+    invoice_id: routeInvoiceId || relatedPayApp || null,
     signer_name: signerName,
     furnisher,
     owner_contractor: ownerContractor,
@@ -126,7 +205,7 @@ export default function LienWaiverCreate() {
     setSaving(true);
     try {
       await lienWaiverService.create(buildWaiverRow('Pending Signature'));
-      navigate('/lien-waivers');
+      routeContractId ? navigate(`/contracts/${routeContractId}`) : navigate('/lien-waivers');
     } catch (err) {
       console.error('Failed to generate waiver:', err);
       alert('Failed to generate waiver. ' + (err.message || ''));
@@ -139,7 +218,7 @@ export default function LienWaiverCreate() {
     setSaving(true);
     try {
       await lienWaiverService.create(buildWaiverRow('Draft'));
-      navigate('/lien-waivers');
+      routeContractId ? navigate(`/contracts/${routeContractId}`) : navigate('/lien-waivers');
     } catch (err) {
       console.error('Failed to save draft:', err);
       alert('Failed to save draft. ' + (err.message || ''));
@@ -168,16 +247,23 @@ export default function LienWaiverCreate() {
       {/* Header */}
       <div style={{ marginBottom: '1.5rem' }}>
         <button
-          onClick={() => navigate('/lien-waivers')}
+          onClick={() => routeContractId ? navigate(`/contracts/${routeContractId}`) : navigate('/lien-waivers')}
           style={{
             background: 'none', border: 'none', color: '#64748b', cursor: 'pointer',
             display: 'flex', alignItems: 'center', gap: '0.5rem',
             fontSize: '0.875rem', fontWeight: 500, padding: 0, marginBottom: '0.5rem',
           }}
         >
-          <ArrowLeft size={16} /> Back to Lien Waivers
+          <ArrowLeft size={16} /> {routeContractId ? 'Back to Contract' : 'Back to Lien Waivers'}
         </button>
         <h1 className="page-title">Generate Lien Waiver</h1>
+        {/* Live waiver ID preview */}
+        <div style={{ marginTop: '0.375rem', padding: '0.5rem 0.875rem', background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: '0.5rem', fontSize: '0.8rem', color: '#166534', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          <span style={{ color: '#94a3b8', fontWeight: 400 }}>Waiver ID:</span>
+          <code style={{ fontFamily: 'monospace', fontSize: '0.85rem', color: '#0f172a', background: '#fff', padding: '2px 8px', borderRadius: 4, border: '1px solid #e2e8f0' }}>
+            LW-{relatedPayApp || routeInvoiceId || '???'}
+          </code>
+        </div>
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem', alignItems: 'start' }}>

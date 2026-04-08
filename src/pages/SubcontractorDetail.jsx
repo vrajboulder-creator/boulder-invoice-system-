@@ -9,7 +9,8 @@ import {
   Award,
   ArrowLeft,
 } from 'lucide-react';
-import { subcontractors, projects, invoices } from '../data/mockData';
+import { subcontractorService, projectService, invoiceService } from '../services/supabaseService';
+import { useSupabase } from '../hooks/useSupabase';
 
 // Mock mapping: subcontractor -> project assignments
 const subProjectMap = {
@@ -73,6 +74,9 @@ function StarRating({ rating, size = 16 }) {
 
 function SubcontractorDetail() {
   const { id } = useParams();
+  const { data: subcontractors } = useSupabase(subcontractorService.list);
+  const { data: projects } = useSupabase(projectService.list);
+  const { data: invoices } = useSupabase(invoiceService.list);
   const sub = subcontractors.find((s) => s.id === id);
 
   if (!sub) {

@@ -1,6 +1,7 @@
 import { useParams, Link } from 'react-router-dom';
 import { ArrowLeft, Printer, Download, HardHat } from 'lucide-react';
-import { estimates, clients } from '../data/mockData';
+import { estimateService, clientService } from '../services/supabaseService';
+import { useSupabaseById, useSupabase } from '../hooks/useSupabase';
 import { downloadPdf } from '../utils/downloadPdf';
 
 const statusBadge = (status) => {
@@ -18,7 +19,12 @@ const formatCurrency = (amount) =>
 
 export default function EstimateDetail() {
   const { id } = useParams();
-  const estimate = estimates.find((e) => e.id === id);
+  const { data: estimate, loading: loadingEstimate } = useSupabaseById(estimateService.getById, id);
+  const { data: allClients, loading: loadingClients } = useSupabase(clientService.list);
+
+  if (loadingEstimate || loadingClients) {
+    return <div style={{ padding: '2rem', textAlign: 'center', color: '#9ca3af' }}>Loading estimate...</div>;
+  }
 
   if (!estimate) {
     return (
@@ -33,7 +39,7 @@ export default function EstimateDetail() {
     );
   }
 
-  const client = clients.find((c) => c.id === estimate.clientId);
+  const client = (allClients || []).find((c) => c.id === estimate.client_id);
 
   return (
     <div style={{ padding: '1.5rem' }}>
@@ -82,15 +88,15 @@ export default function EstimateDetail() {
                 </tr>
                 <tr>
                   <td style={{ fontWeight: 600, paddingRight: '1rem', paddingBottom: '0.25rem', color: '#1e293b' }}>Date:</td>
-                  <td style={{ paddingBottom: '0.25rem' }}>{new Date(estimate.date).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</td>
+                  <td style={{ paddingBottom: '0.25rem' }}>{new Date(estimate.estimate_date || estimate.date).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</td>
                 </tr>
                 <tr>
                   <td style={{ fontWeight: 600, paddingRight: '1rem', paddingBottom: '0.25rem', color: '#1e293b' }}>Valid Until:</td>
-                  <td style={{ paddingBottom: '0.25rem' }}>{new Date(estimate.validUntil).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</td>
+                  <td style={{ paddingBottom: '0.25rem' }}>{new Date(estimate.valid_until || estimate.validUntil).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</td>
                 </tr>
                 <tr>
                   <td style={{ fontWeight: 600, paddingRight: '1rem', color: '#1e293b' }}>Project:</td>
-                  <td>{estimate.projectName}</td>
+                  <td>{estimate.project_name || estimate.projectName}</td>
                 </tr>
               </tbody>
             </table>
@@ -98,8 +104,8 @@ export default function EstimateDetail() {
 
           <div>
             <p style={{ fontSize: '0.75rem', fontWeight: 600, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.5rem' }}>Client</p>
-            <p style={{ fontWeight: 600, color: '#1e293b', fontSize: '0.875rem', margin: '0 0 0.25rem' }}>{client ? client.name : estimate.client}</p>
-            <p style={{ color: '#475569', fontSize: '0.875rem', margin: '0 0 0.25rem' }}>{client ? client.company : estimate.client}</p>
+            <p style={{ fontWeight: 600, color: '#1e293b', fontSize: '0.875rem', margin: '0 0 0.25rem' }}>{client ? client.name : (estimate.client_name || estimate.client)}</p>
+            <p style={{ color: '#475569', fontSize: '0.875rem', margin: '0 0 0.25rem' }}>{client ? client.company : (estimate.client_name || estimate.client)}</p>
             {client && (
               <>
                 <p style={{ color: '#475569', fontSize: '0.875rem', margin: '0 0 0.125rem' }}>{client.address}</p>
@@ -121,12 +127,12 @@ export default function EstimateDetail() {
             </tr>
           </thead>
           <tbody>
-            {estimate.lineItems.map((item, idx) => (
+            {(estimate.lineItems || []).map((item, idx) => (
               <tr key={idx} style={{ borderBottom: '1px solid #f1f5f9' }}>
                 <td style={{ padding: '0.75rem 0.5rem', fontSize: '0.875rem', color: '#1e293b' }}>{item.description}</td>
                 <td style={{ padding: '0.75rem 0.5rem', fontSize: '0.875rem', color: '#475569', textAlign: 'center' }}>{item.quantity}</td>
-                <td style={{ padding: '0.75rem 0.5rem', fontSize: '0.875rem', color: '#475569', textAlign: 'right' }}>{formatCurrency(item.unitCost)}</td>
-                <td style={{ padding: '0.75rem 0.5rem', fontSize: '0.875rem', color: '#1e293b', fontWeight: 600, textAlign: 'right' }}>{formatCurrency(item.total)}</td>
+                <td style={{ padding: '0.75rem 0.5rem', fontSize: '0.875rem', color: '#475569', textAlign: 'right' }}>{formatCurrency(item.unit_cost || item.unitCost || 0)}</td>
+                <td style={{ padding: '0.75rem 0.5rem', fontSize: '0.875rem', color: '#1e293b', fontWeight: 600, textAlign: 'right' }}>{formatCurrency(item.total || 0)}</td>
               </tr>
             ))}
           </tbody>
@@ -137,15 +143,15 @@ export default function EstimateDetail() {
           <div style={{ width: '280px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem 0', fontSize: '0.875rem', color: '#475569' }}>
               <span>Subtotal</span>
-              <span style={{ fontWeight: 500 }}>{formatCurrency(estimate.subtotal)}</span>
+              <span style={{ fontWeight: 500 }}>{formatCurrency(estimate.subtotal || 0)}</span>
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem 0', fontSize: '0.875rem', color: '#475569', borderBottom: '1px solid #e2e8f0' }}>
               <span>Tax</span>
-              <span style={{ fontWeight: 500 }}>{formatCurrency(estimate.tax)}</span>
+              <span style={{ fontWeight: 500 }}>{formatCurrency(estimate.tax || 0)}</span>
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.75rem 0', fontSize: '1.125rem', fontWeight: 700, color: '#0f172a' }}>
               <span>Grand Total</span>
-              <span>{formatCurrency(estimate.grandTotal)}</span>
+              <span>{formatCurrency(estimate.total_amount || estimate.grandTotal || 0)}</span>
             </div>
           </div>
         </div>

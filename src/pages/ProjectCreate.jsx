@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ArrowLeft, Plus, X, Save, Users, Layers, Loader2 } from 'lucide-react';
-import { clients as mockClients } from '../data/mockData';
 import { projectService, clientService } from '../services/supabaseService';
 import { useSupabase } from '../hooks/useSupabase';
 
@@ -50,7 +49,7 @@ export default function ProjectCreate() {
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState(null);
 
-  const { data: clients } = useSupabase(clientService.list, mockClients);
+  const { data: clients } = useSupabase(clientService.list);
 
   const toggleTeamMember = (name) => {
     setSelectedTeam((prev) =>

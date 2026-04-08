@@ -1,8 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { ArrowLeft, Plus, X, Save, Send, Loader2 } from 'lucide-react';
-import { clients as mockClients, projects as mockProjects, contracts as mockContracts } from '../data/mockData';
-import { contractService, clientService, projectService } from '../services/supabaseService';
+import { contractService, clientService, projectService, generateContractId } from '../services/supabaseService';
 import { useSupabase } from '../hooks/useSupabase';
 
 const formatCurrency = (n) =>
@@ -49,8 +48,8 @@ export default function ContractCreate() {
       let c = null;
       try {
         c = await contractService.getById(editId);
-      } catch {
-        c = mockContracts.find((m) => m.id === editId) || null;
+      } catch (err) {
+        console.error('Failed to load contract for editing:', err);
       }
       if (c) {
         setTitle(c.title || '');
@@ -70,11 +69,18 @@ export default function ContractCreate() {
     loadContract();
   }, [editId]);
 
-  const { data: clients } = useSupabase(clientService.list, mockClients);
-  const { data: projectsList } = useSupabase(projectService.list, mockProjects);
+  const { data: clients } = useSupabase(clientService.list);
+  const { data: projectsList } = useSupabase(projectService.list);
 
   const selectedClient = clients.find((c) => c.id === clientId);
   const clientProjects = projectsList.filter((p) => (p.clientId || p.client_id) === clientId);
+
+  // Live preview of next contract ID
+  const [previewId, setPreviewId] = useState('');
+  useEffect(() => {
+    if (editId || !selectedClient) { setPreviewId(''); return; }
+    generateContractId(selectedClient.company).then(setPreviewId).catch(() => setPreviewId(''));
+  }, [selectedClient, editId]);
 
   const updateLineItem = (index, field, value) => {
     setLineItems((prev) => {
@@ -156,6 +162,25 @@ export default function ContractCreate() {
             <ArrowLeft size={16} /> {editId ? 'Back to Contract' : 'Back to Contracts'}
           </button>
           <h1 className="page-title">{editId ? `Edit Contract — ${editId}` : 'Create New Contract'}</h1>
+          {/* Live contract ID preview */}
+          {!editId && (
+            <div style={{ marginTop: '0.375rem', padding: '0.5rem 0.875rem', background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: '0.5rem', fontSize: '0.8rem', color: '#166534', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <span style={{ color: '#94a3b8', fontWeight: 400 }}>Contract ID:</span>
+              <code style={{ fontFamily: 'monospace', fontSize: '0.85rem', color: '#0f172a', background: '#fff', padding: '2px 8px', borderRadius: 4, border: '1px solid #e2e8f0' }}>
+                {previewId || `CON-???-${new Date().getFullYear()}-###`}
+              </code>
+              {previewId && (
+                <span style={{ color: '#64748b', fontWeight: 400, fontSize: '0.75rem' }}>
+                  Invoice will be: {previewId}-D01, {previewId}-D02, ...
+                </span>
+              )}
+              {!previewId && (
+                <span style={{ color: '#94a3b8', fontWeight: 400, fontSize: '0.75rem' }}>
+                  Select a client to see ID
+                </span>
+              )}
+            </div>
+          )}
           {editId && (
             <div style={{ marginTop: '0.375rem', padding: '0.375rem 0.75rem', background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: '0.375rem', fontSize: '0.8rem', color: '#1d4ed8', fontWeight: 500 }}>
               Editing draft — changes will overwrite current contract data.

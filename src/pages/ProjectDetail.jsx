@@ -16,7 +16,8 @@ import {
   Presentation,
   HardHat,
 } from 'lucide-react';
-import { projects, employees, documents, changeOrders } from '../data/mockData';
+import { projectService, employeeService, documentService, changeOrderService } from '../services/supabaseService';
+import { useSupabase, useSupabaseById } from '../hooks/useSupabase';
 
 const statusBadge = {
   'In Progress': 'badge-blue',
@@ -96,7 +97,18 @@ export default function ProjectDetail() {
   const { id } = useParams();
   const [activeTab, setActiveTab] = useState('overview');
 
-  const project = projects.find((p) => p.id === id);
+  const { data: project, loading: projectLoading } = useSupabaseById(projectService.getById, id);
+  const { data: employees } = useSupabase(employeeService.list);
+  const { data: documents } = useSupabase(documentService.list);
+  const { data: allChangeOrders } = useSupabase(changeOrderService.list);
+
+  if (projectLoading) {
+    return (
+      <div className="space-y-6">
+        <div className="text-center py-20 text-gray-500">Loading...</div>
+      </div>
+    );
+  }
 
   if (!project) {
     return (
@@ -115,8 +127,8 @@ export default function ProjectDetail() {
     );
   }
 
-  const projectDocs = documents.filter((d) => d.projectId === project.id);
-  const projectCOs = changeOrders.filter((c) => c.projectId === project.id);
+  const projectDocs = documents.filter((d) => d.projectId === project.id || d.project_id === project.id);
+  const projectCOs = allChangeOrders.filter((c) => c.projectId === project.id || c.project_id === project.id);
 
   const budgetPct = Math.round((project.spent / project.budget) * 100);
 
@@ -128,7 +140,7 @@ export default function ProjectDetail() {
   });
 
   // Find employee details for team members
-  const teamDetails = project.team.map((name) => {
+  const teamDetails = (project.team || []).map((name) => {
     const emp = employees.find((e) => e.name === name);
     return {
       name,

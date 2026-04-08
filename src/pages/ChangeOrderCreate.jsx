@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ArrowLeft, Send, Upload, Loader2 } from 'lucide-react';
-import { projects as mockProjects, changeOrders as mockChangeOrders } from '../data/mockData';
 import { changeOrderService, projectService } from '../services/supabaseService';
 import { useSupabase } from '../hooks/useSupabase';
 
@@ -17,13 +16,13 @@ export default function ChangeOrderCreate() {
   const [submitting, setSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
 
-  // Fetch projects from Supabase with mock fallback
-  const { data: projectsList } = useSupabase(projectService.list, mockProjects);
+  // Fetch projects and existing change orders from Supabase
+  const { data: projectsList } = useSupabase(projectService.list);
+  const { data: existingCOs } = useSupabase(changeOrderService.list);
 
   // Auto-generate next CO number
   const generateCoNumber = () => {
-    // Look at mock data to determine the highest existing number
-    const existingNumbers = mockChangeOrders
+    const existingNumbers = existingCOs
       .map(co => {
         const match = (co.id || co.co_number || '').match(/CO-(\d+)/);
         return match ? parseInt(match[1], 10) : 0;

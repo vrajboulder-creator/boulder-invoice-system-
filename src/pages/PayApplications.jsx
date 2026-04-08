@@ -1,8 +1,7 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { FileText, Plus, CheckCircle, DollarSign, ChevronRight, Loader2, Shield } from 'lucide-react';
-import { payApplications as mockPayApps, subPayApplications as mockSubPayApps } from '../data/mockData';
-import { payAppService } from '../services/supabaseService';
+import { payAppService, subPayAppService } from '../services/supabaseService';
 import { useSupabase } from '../hooks/useSupabase';
 
 const formatCurrency = (amount) =>
@@ -38,11 +37,11 @@ export default function PayApplications() {
   const [outstandingOnly, setOutstandingOnly] = useState(false);
   const [actionLoading, setActionLoading] = useState(null);
 
-  // Fetch all pay applications from Supabase with mock fallback
-  const { data: rawApps, loading, refetch, usingMock } = useSupabase(
-    payAppService.list,
-    [...mockPayApps, ...mockSubPayApps]
-  );
+  // Fetch all pay applications from Supabase
+  const { data: payApps, loading: loadingPayApps, refetch } = useSupabase(payAppService.list);
+  const { data: subPayApps, loading: loadingSubPayApps } = useSupabase(subPayAppService.list);
+  const loading = loadingPayApps || loadingSubPayApps;
+  const rawApps = [...payApps, ...subPayApps];
 
   // Normalize all records
   const allApps = rawApps.map(normalize);
@@ -59,10 +58,6 @@ export default function PayApplications() {
 
   // Action handlers
   const handleApprove = async (id) => {
-    if (usingMock) {
-      alert('Cannot update status — using mock data (Supabase not connected).');
-      return;
-    }
     setActionLoading(id);
     try {
       await payAppService.updateStatus(id, 'Approved');
@@ -75,10 +70,6 @@ export default function PayApplications() {
   };
 
   const handleMarkPaid = async (id) => {
-    if (usingMock) {
-      alert('Cannot update status — using mock data (Supabase not connected).');
-      return;
-    }
     setActionLoading(id);
     try {
       await payAppService.updateStatus(id, 'Paid');
@@ -144,7 +135,6 @@ export default function PayApplications() {
           <h1 className="page-title">Pay Applications (AIA G702/G703)</h1>
           <p style={{ color: '#64748b', fontSize: '0.875rem', marginTop: '0.25rem' }}>
             Manage contractor and subcontractor pay applications
-            {usingMock && <span style={{ marginLeft: '0.5rem', color: '#d97706', fontWeight: 600 }}>(Mock Data)</span>}
           </p>
         </div>
         <Link to="/pay-applications/create" className="btn-primary" style={{ textDecoration: 'none' }}>

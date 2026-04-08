@@ -1,6 +1,9 @@
 import { useState } from 'react';
 import { Building2, Users, Bell, Palette, Upload, Edit, UserMinus } from 'lucide-react';
-import { employees, currentUser } from '../data/mockData';
+import { employeeService } from '../services/supabaseService';
+import { useSupabase } from '../hooks/useSupabase';
+
+const currentUser = { id: 'USR-001', name: 'Mike Thornton', email: 'mike@boulderconstruction.com', role: 'Admin', initials: 'MT' };
 
 const tabs = [
   { id: 'company', label: 'Company Profile', icon: Building2 },
@@ -19,6 +22,7 @@ const notificationOptions = [
 ];
 
 function Settings() {
+  const { data: employees } = useSupabase(employeeService.list);
   const [activeTab, setActiveTab] = useState('company');
 
   // Company Profile form state

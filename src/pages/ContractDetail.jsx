@@ -5,7 +5,6 @@ import {
   ClipboardList, CheckCircle, Clock, Send, Printer, Plus, Receipt,
   Pencil, Trash2, Loader2,
 } from 'lucide-react';
-import { contracts as mockContracts, invoices as mockInvoices, payApplications } from '../data/mockData';
 import { contractService, invoiceService } from '../services/supabaseService';
 import { useSupabase, useSupabaseById } from '../hooks/useSupabase';
 
@@ -68,14 +67,16 @@ export default function ContractDetail() {
   const [actionLoading, setActionLoading] = useState(null);
   const [deleteConfirm, setDeleteConfirm] = useState(false);
 
-  // Live data with mock fallback
-  const { data: contract, loading, setData: setContract, refetch } = useSupabaseById(contractService.getById, id, (cid) => mockContracts.find((c) => c.id === cid));
+  // Live data from Supabase
+  const { data: contract, loading, setData: setContract, refetch } = useSupabaseById(contractService.getById, id);
 
   // Re-fetch when navigating back from edit
   useEffect(() => {
     if (location.state?.refetch) refetch();
   }, [location.state?.refetch]);
-  const { data: liveInvoices } = useSupabase(invoiceService.list, mockInvoices);
+  const { data: liveInvoices } = useSupabase(
+    () => invoiceService.listByContract(id),
+  );
 
   const runAction = async (key, fn, optimisticStatus) => {
     setActionLoading(key);
@@ -124,7 +125,7 @@ export default function ContractDetail() {
   }
 
   // Normalize snake_case (Supabase) → camelCase for all reads
-  const contractValue  = parseFloat(contract.contract_value  ?? contractValue  ?? 0);
+  const contractValue  = parseFloat(contract.contract_value  ?? contract.contractValue ?? 0);
   const contractType   = contract.contract_type  || contract.type        || 'Lump Sum';
   const startDate      = contract.start_date     || contract.startDate   || '—';
   const endDate        = contract.end_date       || contract.endDate     || '—';
@@ -140,19 +141,14 @@ export default function ContractDetail() {
 
   const st = STATUS_STYLE[contract.status] || STATUS_STYLE.Draft;
   const tt = TYPE_STYLE[contractType] || { background: '#f1f5f9', color: '#64748b' };
-  const pct = Math.round((lineItems.reduce((s, i) => s + (parseFloat(i.amount) || 0), 0) / contractValue) * 100) || 100;
-
-  // All invoices linked to this contract — live data first, fallback to mock
-  const allPayApps = [
-    ...liveInvoices.filter((i) => (i.contractId || i.contract_id) === contract.id),
-    ...payApplications.filter((p) => p.contractId === contract.id),
-  ]
-    .filter((item, idx, self) => self.findIndex((x) => x.id === item.id) === idx) // dedupe
+  // All invoices linked to this contract from Supabase
+  const allPayApps = liveInvoices
+    .filter((i) => (i.contractId || i.contract_id) === contract.id)
     .sort((a, b) => (a.applicationNo ?? a.application_no ?? 0) - (b.applicationNo ?? b.application_no ?? 0));
 
   // Build cumulative G703 continuation sheet from all pay apps
   // Each SOV line item keyed by description — accumulate across all apps
-  const sovLines = (contract.lineItems || []).map((li, idx) => {
+  const sovLines = (contract.contract_line_items || contract.lineItems || []).map((li, idx) => {
     const scheduledValue = li.amount;
     let totalCompleted = 0;
     const appBreakdown = allPayApps.map((app) => {
@@ -451,11 +447,18 @@ export default function ContractDetail() {
                   <div style={{ width: `${overallPct}%`, height: '100%', background: overallPct >= 75 ? '#059669' : overallPct >= 50 ? '#3b82f6' : '#f59e0b', borderRadius: 4, transition: 'width 0.3s' }} />
                 </div>
               </div>
-              <Link to={`/invoices/create?contractId=${contract.id}`}>
-                <button className="btn-primary">
-                  <Plus size={15} /> New Pay Application
-                </button>
-              </Link>
+              <div style={{ display: 'flex', gap: '0.75rem' }}>
+                <Link to={`/contracts/${contract.id}/g703`}>
+                  <button className="btn-secondary" style={{ fontSize: '0.8125rem' }}>
+                    G703 Report
+                  </button>
+                </Link>
+                <Link to={`/contracts/${contract.id}/invoices/create`}>
+                  <button className="btn-primary">
+                    <Plus size={15} /> New Pay Application
+                  </button>
+                </Link>
+              </div>
             </div>
           </div>
 
@@ -469,7 +472,7 @@ export default function ContractDetail() {
               <div style={{ padding: '3rem', textAlign: 'center' }}>
                 <Receipt size={32} style={{ color: '#e2e8f0', marginBottom: '0.75rem' }} />
                 <div style={{ color: '#94a3b8', fontSize: '0.875rem', marginBottom: '1rem' }}>No pay applications yet for this contract.</div>
-                <Link to={`/invoices/create?contractId=${contract.id}`}>
+                <Link to={`/contracts/${contract.id}/invoices/create`}>
                   <button className="btn-primary"><Plus size={14} /> Create First Pay Application</button>
                 </Link>
               </div>
@@ -477,17 +480,30 @@ export default function ContractDetail() {
               <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                 <thead>
                   <tr style={{ background: '#f8fafc', borderBottom: '1px solid #e2e8f0' }}>
-                    {['App #', 'Period', 'Contract Value', 'This Period', 'Total to Date', '% Complete', 'Status', ''].map((h) => (
-                      <th key={h} style={{ padding: '0.75rem 1rem', textAlign: 'left', fontSize: '0.7rem', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.07em', whiteSpace: 'nowrap' }}>{h}</th>
-                    ))}
+                    {['App #', 'Period', 'Contract Value', 'This Period', 'Retainage', 'Net Due', 'Total to Date', '% Complete', 'Status', ''].map((h) => {
+                      const leftAlign = h === 'App #' || h === 'Period' || h === 'Status' || h === '' || h === '% Complete';
+                      return (
+                        <th key={h} style={{ padding: '0.75rem 1rem', textAlign: leftAlign ? 'left' : 'right', fontSize: '0.7rem', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.07em', whiteSpace: 'nowrap' }}>{h}</th>
+                      );
+                    })}
                   </tr>
                 </thead>
                 <tbody>
-                  {allPayApps.map((app) => {
+                  {allPayApps.map((app, appIdx) => {
                     const appNo = app.applicationNo ?? app.application_no ?? '—';
-                    const appTotal = app.amount || app.current_payment_due || (app.lineItems || []).reduce((s, li) => s + (li.thisPeriod || li.this_period || 0), 0);
-                    const appToDate = app.total_completed_and_stored || (app.lineItems || []).reduce((s, li) => s + (li.totalCompleted || li.total_completed || 0), 0);
-                    const appPct = contractValue > 0 ? Math.round((appToDate / contractValue) * 100) : 0;
+                    const lineItems = app.pay_application_line_items || app.lineItems || [];
+                    // "This Period" = sum of this_period from line items (what was billed THIS app only)
+                    const appThisPeriod = lineItems.reduce((s, li) => s + parseFloat(li.this_period ?? li.thisPeriod ?? 0), 0);
+                    const appRetainage = parseFloat(app.total_retainage ?? 0) || lineItems.reduce((s, li) => s + parseFloat(li.retainage ?? 0), 0);
+                    const appNetDue = parseFloat(app.current_payment_due ?? app.amount ?? 0);
+                    const totalBilledToDate = allPayApps.slice(0, appIdx + 1).reduce((s, a) => s + parseFloat(a.current_payment_due ?? a.amount ?? 0), 0);
+                    // Cumulative total to date = sum of this_period across ALL apps up to this one
+                    const cumulativeToDate = allPayApps.slice(0, appIdx + 1).reduce((s, a) => {
+                      const aLines = a.pay_application_line_items || a.lineItems || [];
+                      const thisPeriodSum = aLines.reduce((ls, li) => ls + parseFloat(li.this_period ?? li.thisPeriod ?? 0), 0);
+                      return s + thisPeriodSum;
+                    }, 0);
+                    const appPct = contractValue > 0 ? Math.min(Math.round((cumulativeToDate / contractValue) * 100), 100) : 0;
                     const statusColor = {
                       Paid: '#059669', Approved: '#059669', Pending: '#d97706',
                       Overdue: '#dc2626', Draft: '#64748b', Submitted: '#3b82f6',
@@ -502,9 +518,11 @@ export default function ContractDetail() {
                           #{appNo}
                         </td>
                         <td style={{ padding: '0.9rem 1rem', color: '#475569', fontSize: '0.875rem' }}>{period}</td>
-                        <td style={{ padding: '0.9rem 1rem', color: '#475569', fontSize: '0.875rem' }}>{formatCurrency(contractValue)}</td>
-                        <td style={{ padding: '0.9rem 1rem', fontWeight: 600, color: '#0f172a', fontSize: '0.875rem' }}>{formatCurrency(appTotal)}</td>
-                        <td style={{ padding: '0.9rem 1rem', fontWeight: 600, color: '#0f172a', fontSize: '0.875rem' }}>{formatCurrency(appToDate)}</td>
+                        <td style={{ padding: '0.9rem 1rem', color: '#475569', fontSize: '0.875rem', textAlign: 'right' }}>{formatCurrency(contractValue)}</td>
+                        <td style={{ padding: '0.9rem 1rem', fontWeight: 600, color: '#0f172a', fontSize: '0.875rem', textAlign: 'right' }}>{formatCurrency(appThisPeriod)}</td>
+                        <td style={{ padding: '0.9rem 1rem', fontWeight: 600, color: '#dc2626', fontSize: '0.875rem', textAlign: 'right' }}>{appRetainage > 0 ? formatCurrency(appRetainage) : '—'}</td>
+                        <td style={{ padding: '0.9rem 1rem', fontWeight: 700, color: '#059669', fontSize: '0.875rem', textAlign: 'right' }}>{formatCurrency(appNetDue)}</td>
+                        <td style={{ padding: '0.9rem 1rem', fontWeight: 600, color: '#0f172a', fontSize: '0.875rem', textAlign: 'right' }}>{formatCurrency(cumulativeToDate)}</td>
                         <td style={{ padding: '0.9rem 1rem' }}>
                           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                             <div style={{ width: 56, height: 6, borderRadius: 3, background: '#f1f5f9', overflow: 'hidden' }}>
@@ -518,9 +536,12 @@ export default function ContractDetail() {
                             {app.status}
                           </span>
                         </td>
-                        <td style={{ padding: '0.9rem 1rem' }}>
+                        <td style={{ padding: '0.9rem 1rem', whiteSpace: 'nowrap' }}>
                           <Link to={`/invoices/${app.id}`} style={{ fontSize: '0.8125rem', color: '#f07030', fontWeight: 600, textDecoration: 'none' }}>
                             View →
+                          </Link>
+                          <Link to={`/contracts/${contract.id}/invoices/${app.id}/lien-waiver/create?contractValue=${contractValue}&totalBilled=${totalBilledToDate}`} style={{ fontSize: '0.8125rem', color: '#64748b', fontWeight: 600, textDecoration: 'none', marginLeft: '0.875rem' }}>
+                            + Waiver
                           </Link>
                         </td>
                       </tr>

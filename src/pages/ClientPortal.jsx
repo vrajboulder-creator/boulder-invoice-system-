@@ -15,14 +15,10 @@ import {
   ThumbsDown,
   Lock,
 } from 'lucide-react';
-import { clients, projects, estimates, invoices } from '../data/mockData';
-import { invoiceService } from '../services/supabaseService';
+import { clientService, projectService, estimateService, invoiceService } from '../services/supabaseService';
+import { useSupabase } from '../hooks/useSupabase';
 
 const CLIENT_ID = 'CLI-001';
-const client = clients.find((c) => c.id === CLIENT_ID);
-const clientProjects = projects.filter((p) => p.clientId === CLIENT_ID);
-const clientEstimates = estimates.filter((e) => e.clientId === CLIENT_ID);
-const clientInvoices = invoices.filter((i) => i.clientId === CLIENT_ID);
 
 const hardcodedMessages = [
   {
@@ -87,13 +83,34 @@ const formatCurrency = (n) =>
   new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 0 }).format(n);
 
 export default function ClientPortal() {
+  const { data: allClients, loading: loadingClients } = useSupabase(clientService.list);
+  const { data: allProjects, loading: loadingProjects } = useSupabase(projectService.list);
+  const { data: allEstimates, loading: loadingEstimates } = useSupabase(estimateService.list);
+  const { data: allInvoices, loading: loadingInvoices } = useSupabase(invoiceService.list);
+
+  const client = (allClients || []).find((c) => c.id === CLIENT_ID) || {};
+  const clientProjects = (allProjects || []).filter((p) => p.client_id === CLIENT_ID);
+  const clientEstimates = (allEstimates || []).filter((e) => e.client_id === CLIENT_ID);
+  const clientInvoices = (allInvoices || []).filter((i) => i.client_id === CLIENT_ID || i.owner_name === (client.name || ''));
+
   const [messageText, setMessageText] = useState('');
   const [messages, setMessages] = useState(hardcodedMessages);
   // Local invoice statuses — client can approve/reject Pending invoices
-  const [invoiceStatuses, setInvoiceStatuses] = useState(
-    () => Object.fromEntries(clientInvoices.map((i) => [i.id, i.status]))
-  );
+  const [invoiceStatuses, setInvoiceStatuses] = useState({});
+  const [statusesInitialized, setStatusesInitialized] = useState(false);
   const [invoiceAction, setInvoiceAction] = useState(null); // id being acted on
+
+  // Initialize invoice statuses once data loads
+  if (!statusesInitialized && clientInvoices.length > 0) {
+    setInvoiceStatuses(Object.fromEntries(clientInvoices.map((i) => [i.id, i.status])));
+    setStatusesInitialized(true);
+  }
+
+  const loading = loadingClients || loadingProjects || loadingEstimates || loadingInvoices;
+
+  if (loading) {
+    return <div style={{ padding: '2rem', textAlign: 'center', color: '#9ca3af' }}>Loading portal...</div>;
+  }
 
   const handleClientApprove = async (invId) => {
     setInvoiceAction(invId + '_approve');
@@ -216,10 +233,10 @@ export default function ClientPortal() {
                 {clientEstimates.map((est) => (
                   <tr key={est.id} className="border-b border-slate-100 last:border-0">
                     <td className="px-5 py-3 font-medium text-slate-900">{est.id}</td>
-                    <td className="px-5 py-3 text-slate-600">{est.projectName}</td>
-                    <td className="px-5 py-3 text-slate-500">{est.date}</td>
+                    <td className="px-5 py-3 text-slate-600">{est.project_name || est.projectName}</td>
+                    <td className="px-5 py-3 text-slate-500">{est.estimate_date || est.date}</td>
                     <td className="px-5 py-3 text-right font-medium text-slate-900">
-                      {formatCurrency(est.totalAmount)}
+                      {formatCurrency(est.total_amount || est.totalAmount || 0)}
                     </td>
                     <td className="px-5 py-3 text-center">{statusBadge(est.status)}</td>
                   </tr>
@@ -261,10 +278,10 @@ export default function ClientPortal() {
                           <span className="font-medium text-slate-900">{inv.id}</span>
                         </div>
                       </td>
-                      <td className="px-5 py-3 text-slate-600">{inv.project}</td>
-                      <td className="px-5 py-3 text-slate-500">{inv.issueDate}</td>
-                      <td className="px-5 py-3 text-slate-500">{inv.dueDate}</td>
-                      <td className="px-5 py-3 text-right font-medium text-slate-900">{formatCurrency(inv.amount)}</td>
+                      <td className="px-5 py-3 text-slate-600">{inv.project_name || inv.project}</td>
+                      <td className="px-5 py-3 text-slate-500">{inv.application_date || inv.issueDate}</td>
+                      <td className="px-5 py-3 text-slate-500">{inv.period_to || inv.dueDate}</td>
+                      <td className="px-5 py-3 text-right font-medium text-slate-900">{formatCurrency(inv.current_payment_due || inv.amount || 0)}</td>
                       <td className="px-5 py-3 text-center">{statusBadge(currentStatus)}</td>
                       <td className="px-5 py-3">
                         {currentStatus === 'Pending' && (

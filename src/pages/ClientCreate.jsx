@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ArrowLeft, Save } from 'lucide-react';
+import { clientService } from '../services/supabaseService';
 
 export default function ClientCreate() {
   const navigate = useNavigate();
@@ -21,9 +22,27 @@ export default function ClientCreate() {
     marginBottom: '0.25rem',
   };
 
-  const handleSave = () => {
-    alert('Client saved successfully!');
-    navigate('/clients');
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState(null);
+
+  const handleSave = async () => {
+    setSaving(true);
+    setSaveError(null);
+    try {
+      await clientService.create({
+        name: fullName,
+        company: companyName,
+        email,
+        phone,
+        address,
+        status,
+        notes,
+      });
+      navigate('/clients');
+    } catch (err) {
+      setSaveError(err.message || 'Failed to save client.');
+      setSaving(false);
+    }
   };
 
   return (
@@ -50,6 +69,12 @@ export default function ClientCreate() {
         </button>
         <h1 className="page-title">Add New Client</h1>
       </div>
+
+      {saveError && (
+        <div style={{ padding: '0.75rem 1rem', marginBottom: '1rem', borderRadius: 8, background: '#fef2f2', border: '1px solid #fecaca', color: '#991b1b', fontSize: '0.875rem', maxWidth: '950px' }}>
+          {saveError}
+        </div>
+      )}
 
       {/* Form Card */}
       <div className="card" style={{ padding: '2rem', maxWidth: '950px' }}>
@@ -151,8 +176,8 @@ export default function ClientCreate() {
             >
               Cancel
             </button>
-            <button type="submit" className="btn-primary">
-              <Save size={16} /> Save Client
+            <button type="submit" className="btn-primary" disabled={saving}>
+              <Save size={16} /> {saving ? 'Saving...' : 'Save Client'}
             </button>
           </div>
         </form>

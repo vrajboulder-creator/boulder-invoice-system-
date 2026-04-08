@@ -1,8 +1,7 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Plus, Search, MessageSquare, CheckCircle, Clock, XCircle } from 'lucide-react';
-import { rfis as mockRfis, projects as mockProjects } from '../data/mockData';
-import { rfiService } from '../services/supabaseService';
+import { rfiService, projectService } from '../services/supabaseService';
 import { useSupabase } from '../hooks/useSupabase';
 
 const STATUS_STYLE = {
@@ -22,10 +21,11 @@ export default function RFIs() {
   const [statusFilter, setStatusFilter] = useState('All');
   const [projectFilter, setProjectFilter] = useState('All');
 
-  const { data: rfis } = useSupabase(rfiService.list, mockRfis);
+  const { data: rfis } = useSupabase(rfiService.list);
+  const { data: projects } = useSupabase(projectService.list);
 
   const statuses = ['All', 'Open', 'Responded', 'Closed'];
-  const projectNames = ['All', ...Array.from(new Set(mockRfis.map((r) => r.project)))];
+  const projectNames = ['All', ...Array.from(new Set(rfis.map((r) => r.project || r.project_name).filter(Boolean)))];
 
   const filtered = rfis.filter((r) => {
     const matchSearch = r.subject?.toLowerCase().includes(search.toLowerCase()) ||

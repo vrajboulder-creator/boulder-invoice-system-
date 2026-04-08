@@ -1,10 +1,9 @@
-import { useCallback, useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Printer, Download, CheckCircle, Loader2, Send, ThumbsUp, ThumbsDown, Lock, XCircle, Pencil } from 'lucide-react';
+import { ArrowLeft, Printer, Download, CheckCircle, Loader2, Send, ThumbsUp, ThumbsDown, Lock, XCircle, Pencil, Trash2 } from 'lucide-react';
 import boulderLogo from '../assets/boulder-logo.png';
-import { payApplications as mockPayApps, subPayApplications as mockSubPayApps, clients as mockClients, projects as mockProjects } from '../data/mockData';
-import { invoiceService } from '../services/supabaseService';
-import { useSupabaseById } from '../hooks/useSupabase';
+import { invoiceService, lienWaiverService, clientService, projectService, changeOrderService } from '../services/supabaseService';
+import { useSupabase, useSupabaseById } from '../hooks/useSupabase';
 import { downloadPdf } from '../utils/downloadPdf';
 
 /* ================================================================
@@ -39,7 +38,7 @@ const addDays = (dateStr, days) => {
 function normalizeLineItem(li) {
   const scheduledValue = parseFloat(li.scheduled_value ?? li.scheduledValue ?? li.total ?? 0);
   const previousApplication = parseFloat(li.previous_application ?? li.previousApplication ?? li.previously_completed ?? 0);
-  const thisPeriod = parseFloat(li.this_period ?? li.thisPeriod ?? li.thisPeroid ?? 0);
+  const thisPeriod = parseFloat(li.this_period ?? li.thisPeriod ?? 0);
   const materialsStored = parseFloat(li.materials_stored ?? li.materialsStored ?? 0);
   const totalCompleted = parseFloat(li.total_completed ?? li.totalCompleted ?? (previousApplication + thisPeriod + materialsStored));
   const percentComplete = parseFloat(li.percent_complete ?? li.percentComplete ?? (scheduledValue !== 0 ? (totalCompleted / scheduledValue) * 100 : 0));
@@ -71,43 +70,63 @@ function normalizeInvoice(raw) {
   const rawLineItems = raw.pay_application_line_items || raw.lineItems || raw.invoice_line_items || [];
   const lineItems = rawLineItems.map((li) => normalizeLineItem(li));
 
+  // Compute G702 summary from line items when the fields aren't stored on the record
+  // (the simple `invoices` mock array only has lineItems, not the G702 totals)
+  const computedOriginalContractSum = lineItems.reduce((s, li) => s + li.scheduledValue, 0);
+  const computedTotalCompletedAndStored = lineItems.reduce((s, li) => s + li.totalCompleted, 0);
+  const computedLessPreviousCertificates = lineItems.reduce((s, li) => s + li.previousApplication, 0);
+  const computedTotalRetainage = lineItems.reduce((s, li) => s + li.retainage, 0);
+  const computedTotalEarnedLessRetainage = computedTotalCompletedAndStored - computedTotalRetainage;
+  const computedCurrentPaymentDue = computedTotalEarnedLessRetainage - computedLessPreviousCertificates;
+
+  const originalContractSum = parseFloat(raw.original_contract_sum ?? raw.originalContractSum ?? 0) || computedOriginalContractSum;
+  const netChangeOrders = parseFloat(raw.net_change_orders ?? raw.netChangeOrders ?? 0);
+  const contractSumToDate = parseFloat(raw.contract_sum_to_date ?? raw.contractSumToDate ?? 0) || (originalContractSum + netChangeOrders);
+  const totalCompletedAndStored = parseFloat(raw.total_completed_and_stored ?? raw.totalCompletedAndStored ?? 0) || computedTotalCompletedAndStored;
+  const totalRetainage = parseFloat(raw.total_retainage ?? raw.totalRetainage ?? 0) || computedTotalRetainage;
+  const totalEarnedLessRetainage = parseFloat(raw.total_earned_less_retainage ?? raw.totalEarnedLessRetainage ?? 0) || computedTotalEarnedLessRetainage;
+  const lessPreviousCertificates = parseFloat(raw.less_previous_certificates ?? raw.lessPreviousCertificates ?? 0) || computedLessPreviousCertificates;
+  // Use raw.amount only if there are no line items to compute from
+  const currentPaymentDue = parseFloat(raw.current_payment_due ?? raw.currentPaymentDue ?? 0) || computedCurrentPaymentDue || parseFloat(raw.amount ?? 0);
+  const balanceToFinish = parseFloat(raw.balance_to_finish ?? raw.balanceToFinish ?? 0) || (contractSumToDate - totalCompletedAndStored);
+
   return {
     id: raw.id,
     applicationNo: raw.application_no ?? raw.applicationNo ?? 1,
     projectId: raw.project_id ?? raw.projectId ?? null,
     projectName: raw.project_name ?? raw.projectName ?? raw.contract_for ?? raw.contractFor ?? '',
-    owner: raw.owner_name ?? raw.owner ?? '',
+    owner: raw.owner_name ?? raw.owner ?? raw.client ?? '',
     ownerAddress: raw.owner_address ?? raw.ownerAddress ?? '',
     contractor: raw.contractor_name ?? raw.contractor ?? 'Boulder Construction',
     contractorAddress: raw.contractor_address ?? raw.contractorAddress ?? '123 Commerce Way, Newark, NJ 07102',
     architect: raw.architect ?? '',
     architectAddress: raw.architect_address ?? raw.architectAddress ?? '',
-    contractFor: raw.contract_for ?? raw.contractFor ?? '',
+    contractFor: raw.contract_for ?? raw.contractFor ?? raw.project ?? '',
     contractDate: raw.contract_date ?? raw.contractDate ?? '',
-    periodTo: raw.period_to ?? raw.periodTo ?? raw.application_date ?? raw.applicationDate ?? '',
-    applicationDate: raw.application_date ?? raw.applicationDate ?? '',
+    periodTo: raw.period_to ?? raw.periodTo ?? raw.application_date ?? raw.applicationDate ?? raw.dueDate ?? '',
+    applicationDate: raw.application_date ?? raw.applicationDate ?? raw.issueDate ?? '',
     status: raw.status || 'Pending',
     isSubcontractorVersion: raw.isSubcontractorVersion ?? raw.is_subcontractor_version ?? false,
     subcontractor: raw.subcontractor ?? raw.subcontractor_name ?? raw.from_subcontractor ?? '',
-    
+
     // Distribution fields (AIA G702)
     distributionOwner: raw.distribution_owner ?? true,
     distributionArchitect: raw.distribution_architect ?? false,
     distributionContractor: raw.distribution_contractor ?? false,
 
-    // G702 summary lines
-    originalContractSum: parseFloat(raw.original_contract_sum ?? raw.originalContractSum ?? 0),
-    netChangeOrders: parseFloat(raw.net_change_orders ?? raw.netChangeOrders ?? 0),
-    contractSumToDate: parseFloat(raw.contract_sum_to_date ?? raw.contractSumToDate ?? 0),
-    totalCompletedAndStored: parseFloat(raw.total_completed_and_stored ?? raw.totalCompletedAndStored ?? 0),
+    // G702 summary lines — computed from line items when not explicitly stored
+    originalContractSum,
+    netChangeOrders,
+    contractSumToDate,
+    totalCompletedAndStored,
     retainagePercent,
-    retainageOnCompleted: parseFloat(raw.retainage_on_completed ?? raw.retainageOnCompleted ?? 0),
+    retainageOnCompleted: parseFloat(raw.retainage_on_completed ?? raw.retainageOnCompleted ?? 0) || computedTotalRetainage,
     retainageOnStored: parseFloat(raw.retainage_on_stored ?? raw.retainageOnStored ?? 0),
-    totalRetainage: parseFloat(raw.total_retainage ?? raw.totalRetainage ?? 0),
-    totalEarnedLessRetainage: parseFloat(raw.total_earned_less_retainage ?? raw.totalEarnedLessRetainage ?? 0),
-    lessPreviousCertificates: parseFloat(raw.less_previous_certificates ?? raw.lessPreviousCertificates ?? 0),
-    currentPaymentDue: parseFloat(raw.current_payment_due ?? raw.currentPaymentDue ?? raw.amount ?? 0),
-    balanceToFinish: parseFloat(raw.balance_to_finish ?? raw.balanceToFinish ?? 0),
+    totalRetainage,
+    totalEarnedLessRetainage,
+    lessPreviousCertificates,
+    currentPaymentDue,
+    balanceToFinish,
 
     // Change order summary (AIA G702)
     coPreviousAdditions: parseFloat(raw.co_previous_additions ?? raw.changeOrderSummary?.previousAdditions ?? 0),
@@ -116,6 +135,10 @@ function normalizeInvoice(raw) {
     coThisMonthDeductions: parseFloat(raw.co_this_month_deductions ?? raw.changeOrderSummary?.thisMonthDeductions ?? 0),
 
     lineItems,
+
+    // Payment tracking
+    paidAmount: parseFloat(raw.paid_amount ?? raw.paidAmount ?? 0),
+    paymentStatus: raw.payment_status ?? raw.paymentStatus ?? null, // 'Partial' | 'Full' | null
 
     // Backup draw history (only on some records, e.g. SPA-001)
     backupDrawHistory: raw.backupDrawHistory ?? raw.backup_draw_history ?? null,
@@ -163,32 +186,73 @@ export default function InvoiceDetail() {
   const [activeTab, setActiveTab] = useState('g702');
   const [markingPaid, setMarkingPaid] = useState(false);
   const [actionLoading, setActionLoading] = useState(null); // 'send' | 'approve' | 'reject' | 'paid'
+  const [deleteConfirm, setDeleteConfirm] = useState(false);
+  const [paymentModal, setPaymentModal] = useState(false);
+  const [paymentAmount, setPaymentAmount] = useState('');
+  const [linkedWaivers, setLinkedWaivers] = useState([]);
 
-  // Mock finder: search BOTH payApplications and subPayApplications
-  const mockFinder = useCallback(
-    (searchId) =>
-      mockPayApps.find((i) => i.id === searchId) ||
-      mockSubPayApps.find((i) => i.id === searchId) ||
-      null,
-    []
-  );
+  // Fetch from Supabase (pay_applications table)
+  const { data: rawInvoice, loading, error, setData: setRawData } = useSupabaseById(invoiceService.getById, id);
 
-  // Fetch from Supabase (pay_applications table) with mock fallback
-  const { data: rawInvoice, loading, error, setData: setRawData } = useSupabaseById(invoiceService.getById, id, mockFinder);
+  // Fetch clients, projects, and change orders for lookups
+  const { data: clients } = useSupabase(clientService.list);
+  const { data: projects } = useSupabase(projectService.list);
+  const { data: changeOrders } = useSupabase(changeOrderService.list);
+
+  // Fetch linked lien waivers for this invoice
+  useEffect(() => {
+    if (!id) return;
+    lienWaiverService.listByInvoice(id).then(setLinkedWaivers).catch(() => setLinkedWaivers([]));
+  }, [id]);
+
+  // Fetch all prior pay apps for the same contract (for cumulative G703 column D)
+  const [priorPayApps, setPriorPayApps] = useState([]);
+  useEffect(() => {
+    const contractId = rawInvoice?.contract_id || rawInvoice?.contractId;
+    const appNo = rawInvoice?.application_no ?? rawInvoice?.applicationNo ?? 0;
+    if (!contractId) return;
+    invoiceService.listByContract(contractId).then((all) => {
+      // Only apps that came BEFORE this one (lower application_no)
+      setPriorPayApps(all.filter((a) => (a.application_no ?? a.applicationNo ?? 0) < appNo));
+    }).catch(() => setPriorPayApps([]));
+  }, [rawInvoice]);
 
   // Normalize into unified shape
-  const invoice = rawInvoice ? normalizeInvoice(rawInvoice) : null;
+  const invoice = rawInvoice ? (() => {
+    const normalized = normalizeInvoice(rawInvoice);
+    if (!normalized) return null;
+    // If CO summary fields are all zero, compute from change orders by projectId
+    const hasStoredCO = normalized.coPreviousAdditions || normalized.coPreviousDeductions ||
+                        normalized.coThisMonthAdditions || normalized.coThisMonthDeductions;
+    if (!hasStoredCO && normalized.projectId) {
+      const projectCOs = changeOrders.filter(
+        (co) => (co.projectId || co.project_id) === normalized.projectId && co.status === 'Approved'
+      );
+      // For this application: COs approved before issueDate = previous, on/after = this month
+      const issueDate = rawInvoice.issueDate || rawInvoice.applicationDate || rawInvoice.application_date;
+      projectCOs.forEach((co) => {
+        const coDate = co.date || '';
+        const isThisMonth = issueDate && coDate >= issueDate;
+        if (isThisMonth) normalized.coThisMonthAdditions += co.amount;
+        else normalized.coPreviousAdditions += co.amount;
+      });
+      normalized.netChangeOrders = normalized.coPreviousAdditions + normalized.coThisMonthAdditions
+                                  - normalized.coPreviousDeductions - normalized.coThisMonthDeductions;
+      normalized.contractSumToDate = normalized.originalContractSum + normalized.netChangeOrders;
+    }
+    return normalized;
+  })() : null;
 
-  // Resolve client/project from mock data for address enrichment
+  // Resolve client/project from Supabase data for address enrichment
   const resolveClient = (inv) => {
     if (!inv) return null;
-    const cId = inv.projectId ? mockProjects.find(p => p.id === inv.projectId)?.clientId : null;
-    return mockClients.find(c => c.id === cId) || null;
+    const cId = inv.projectId ? (projects.find(p => p.id === inv.projectId)?.clientId || projects.find(p => p.id === inv.projectId)?.client_id) : null;
+    return clients.find(c => c.id === cId) || null;
   };
 
   const resolveProject = (inv) => {
     if (!inv) return null;
-    return mockProjects.find(p => p.id === inv.projectId) || null;
+    return projects.find(p => p.id === inv.projectId) || null;
   };
 
   const getInvoiceNumber = () => {
@@ -200,11 +264,11 @@ export default function InvoiceDetail() {
     setActionLoading(key);
     try {
       await serviceFn(id);
-      // Optimistic update for mock data (Supabase refetch may fail)
+      // Optimistic update so UI reflects change immediately
       setRawData((prev) => prev ? { ...prev, status: mockStatus } : prev);
     } catch (err) {
       console.error(`Failed to ${key}:`, err);
-      // Still update locally so UI reflects change when using mock
+      // Still update locally so UI reflects change
       setRawData((prev) => prev ? { ...prev, status: mockStatus } : prev);
     } finally {
       setActionLoading(null);
@@ -216,6 +280,46 @@ export default function InvoiceDetail() {
   const handleReject   = () => runAction('reject',  invoiceService.markRejected, 'Rejected');
   const handleMarkPaid = () => runAction('paid',    invoiceService.markPaid,     'Paid');
   const handleMarkOverdue = () => runAction('overdue', invoiceService.markOverdue, 'Overdue');
+
+  const handleRecordPayment = async () => {
+    const amountPaid = parseFloat(paymentAmount) || 0;
+    const due = invoice?.currentPaymentDue || 0;
+    if (amountPaid <= 0) return;
+    setActionLoading('paid');
+    try {
+      await invoiceService.recordPayment(id, amountPaid, due);
+      const isFull = amountPaid >= due;
+      setRawData((prev) => prev ? {
+        ...prev,
+        paid_amount: amountPaid,
+        payment_status: isFull ? 'Full' : 'Partial',
+        status: isFull ? 'Paid' : 'Approved',
+        paid_date: isFull ? new Date().toISOString().split('T')[0] : null,
+      } : prev);
+    } catch (err) {
+      console.error('Record payment failed:', err);
+      alert(err.message || 'Failed to record payment.');
+    } finally {
+      setActionLoading(null);
+      setPaymentModal(false);
+      setPaymentAmount('');
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!deleteConfirm) { setDeleteConfirm(true); return; }
+    setActionLoading('delete');
+    try {
+      await invoiceService.delete(id);
+      const contractId = rawInvoice?.contract_id || rawInvoice?.contractId;
+      contractId ? navigate(`/contracts/${contractId}`) : navigate('/invoices');
+    } catch (err) {
+      console.error('Delete failed:', err);
+      alert(err.message || 'Failed to delete invoice.');
+      setActionLoading(null);
+      setDeleteConfirm(false);
+    }
+  };
 
   // PDF download for active tab — A4, flush edges
   const handleDownload = () => {
@@ -266,6 +370,24 @@ export default function InvoiceDetail() {
   const periodToDisplay = invoice.periodTo || '';
   const paymentDueDate = addDays(periodToDisplay, 30);
 
+  // Payment status label shown alongside invoice status
+  const paymentStatusLabel = (() => {
+    if (!invoice) return null;
+    const ps = invoice.paymentStatus;
+    const paid = invoice.paidAmount || 0;
+    const due = invoice.currentPaymentDue || 0;
+    const retainage = invoice.totalRetainage || 0;
+    if (ps === 'Full' || status === 'Paid') return { label: 'Paid in Full', color: '#16a34a', bg: '#dcfce7' };
+    if (ps === 'Partial' && paid > 0) {
+      const remaining = due - paid;
+      return { label: `Partial — $${paid.toLocaleString()} paid, $${remaining.toLocaleString()} remaining`, color: '#d97706', bg: '#fffbeb' };
+    }
+    if (retainage > 0 && status === 'Approved') {
+      return { label: `Net Due: $${(due).toLocaleString()} (retainage $${retainage.toLocaleString()} held)`, color: '#7c3aed', bg: '#f5f3ff' };
+    }
+    return null;
+  })();
+
   const STATUS_META = {
     Draft:    { color: '#64748b', bg: '#f1f5f9', label: 'Draft' },
     Pending:  { color: '#d97706', bg: '#fffbeb', label: 'Pending — Awaiting Client' },
@@ -283,12 +405,28 @@ export default function InvoiceDetail() {
   const isActing = (key) => actionLoading === key;
 
   // Separate base items and change order items
-  const baseItems = invoice.lineItems.filter(li => !li.isChangeOrder);
-  const coItems = invoice.lineItems.filter(li => li.isChangeOrder);
+  // Build cumulative G703 line items — override previousApplication with sum from all prior apps
+  const g703LineItems = invoice.lineItems.map((li) => {
+    if (priorPayApps.length === 0) return li;
+    const cumulativePrev = priorPayApps.reduce((sum, app) => {
+      const appLines = app.pay_application_line_items || app.lineItems || [];
+      const match = appLines.find((a) =>
+        (a.item_no ?? a.itemNo) === (li.itemNo) || a.description === li.description
+      );
+      return sum + parseFloat(match?.this_period ?? match?.thisPeriod ?? 0);
+    }, 0);
+    const totalCompleted = cumulativePrev + li.thisPeriod + li.materialsStored;
+    const balanceToFinish = li.scheduledValue - totalCompleted;
+    const percentComplete = li.scheduledValue > 0 ? (totalCompleted / li.scheduledValue) * 100 : 0;
+    return { ...li, previousApplication: cumulativePrev, totalCompleted, balanceToFinish, percentComplete };
+  });
+
+  const baseItems = g703LineItems.filter(li => !li.isChangeOrder);
+  const coItems = g703LineItems.filter(li => li.isChangeOrder);
 
   // Grand totals from normalized line items
-  const gtScheduled = invoice.lineItems.reduce((s, li) => s + li.scheduledValue, 0);
-  const gtPrevious = invoice.lineItems.reduce((s, li) => s + li.previousApplication, 0);
+  const gtScheduled = g703LineItems.reduce((s, li) => s + li.scheduledValue, 0);
+  const gtPrevious = g703LineItems.reduce((s, li) => s + li.previousApplication, 0);
   const gtThisPeriod = invoice.lineItems.reduce((s, li) => s + li.thisPeriod, 0);
   const gtMaterials = invoice.lineItems.reduce((s, li) => s + li.materialsStored, 0);
   const gtTotalCompleted = invoice.lineItems.reduce((s, li) => s + li.totalCompleted, 0);
@@ -357,6 +495,34 @@ export default function InvoiceDetail() {
             {sm.label}
           </span>
 
+          {/* Payment status badge */}
+          {paymentStatusLabel && (
+            <span style={{
+              display: 'inline-flex', alignItems: 'center', padding: '4px 14px', borderRadius: 999,
+              fontSize: '0.8rem', fontWeight: 700, color: paymentStatusLabel.color,
+              background: paymentStatusLabel.bg, border: `1px solid ${paymentStatusLabel.color}`,
+            }}>
+              {paymentStatusLabel.label}
+            </span>
+          )}
+
+          {/* Linked waiver badges */}
+          {linkedWaivers.map((w) => {
+            const wCategory = w.waiver_category || 'Partial';
+            const wStatus = w.status || '';
+            const color = wStatus === 'Signed' ? '#16a34a' : wStatus === 'Pending Signature' ? '#d97706' : '#64748b';
+            const bg = wStatus === 'Signed' ? '#dcfce7' : wStatus === 'Pending Signature' ? '#fffbeb' : '#f1f5f9';
+            return (
+              <Link key={w.id} to={`/lien-waivers/${w.id}`} style={{
+                display: 'inline-flex', alignItems: 'center', gap: 5, padding: '4px 12px', borderRadius: 999,
+                fontSize: '0.78rem', fontWeight: 700, color, background: bg, border: `1px solid ${color}`,
+                textDecoration: 'none',
+              }}>
+                Waiver: {wCategory} · {wStatus}
+              </Link>
+            );
+          })}
+
           {/* FROZEN notice */}
           {isFrozen && (
             <span style={{ fontSize: '0.75rem', color: '#d97706', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 4 }}>
@@ -398,15 +564,15 @@ export default function InvoiceDetail() {
             </>
           )}
 
-          {/* Approved → Mark Paid */}
-          {status === 'Approved' && (
+          {/* Approved → Record Payment (supports partial + full) */}
+          {(status === 'Approved' || invoice?.paymentStatus === 'Partial') && (
             <button
-              onClick={handleMarkPaid}
+              onClick={() => { setPaymentAmount(String(invoice?.currentPaymentDue || '')); setPaymentModal(true); }}
               disabled={isActing('paid')}
               style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 16px', borderRadius: 6, border: '1px solid #16a34a', background: '#dcfce7', color: '#16a34a', cursor: 'pointer', fontSize: '0.85rem', fontWeight: 600, opacity: isActing('paid') ? 0.6 : 1 }}
             >
               {isActing('paid') ? <Loader2 size={16} style={{ animation: 'spin 1s linear infinite' }} /> : <CheckCircle size={16} />}
-              Mark as Paid
+              Record Payment
             </button>
           )}
 
@@ -426,6 +592,24 @@ export default function InvoiceDetail() {
               <Pencil size={16} /> Edit Invoice
             </button>
           )}
+
+          {/* Delete — two-click confirmation */}
+          {deleteConfirm && (
+            <button
+              onClick={() => setDeleteConfirm(false)}
+              style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 12px', borderRadius: 6, border: '1px solid #e2e8f0', background: '#fff', color: '#64748b', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 500 }}
+            >
+              Cancel
+            </button>
+          )}
+          <button
+            onClick={handleDelete}
+            disabled={isActing('delete')}
+            style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 16px', borderRadius: 6, border: `1px solid ${deleteConfirm ? '#dc2626' : '#e2e8f0'}`, background: deleteConfirm ? '#fef2f2' : '#fff', color: deleteConfirm ? '#dc2626' : '#94a3b8', cursor: 'pointer', fontSize: '0.85rem', fontWeight: 600, opacity: isActing('delete') ? 0.6 : 1 }}
+          >
+            {isActing('delete') ? <Loader2 size={16} style={{ animation: 'spin 1s linear infinite' }} /> : <Trash2 size={16} />}
+            {deleteConfirm ? 'Confirm Delete' : 'Delete'}
+          </button>
 
           <button onClick={() => window.print()} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 16px', borderRadius: 6, border: '1px solid #cbd5e1', background: '#fff', cursor: 'pointer', fontSize: '0.85rem', fontWeight: 500 }}>
             <Printer size={16} /> Print
@@ -725,7 +909,7 @@ export default function InvoiceDetail() {
           TAB 2: G703 — CONTINUATION SHEET
           ================================================================ */}
       {activeTab === 'g703' && (
-        <div id="invoice-g703-content" style={{ ...pageStyle, pageBreakBefore: 'always' }}>
+        <div id="invoice-g703-content" style={{ ...pageStyle, padding: '24px 20px', pageBreakBefore: 'always' }}>
 
           {/* AIA G703 Document Header */}
           <div style={{ borderBottom: '2px solid #000', paddingBottom: 8, marginBottom: 16 }}>
@@ -743,8 +927,105 @@ export default function InvoiceDetail() {
             </div>
           </div>
 
-          {/* CONTINUATION TABLE */}
-          <div style={{ overflowX: 'auto' }}>
+          {/* PRIOR PAY APPLICATIONS — full G703 tables for each previous invoice on this contract */}
+          {priorPayApps.length > 0 && priorPayApps.map((priorApp, priorIdx) => {
+            const priorLines = (priorApp.pay_application_line_items || priorApp.lineItems || []).map((li) => normalizeLineItem(li));
+            const priorAppNo = priorApp.application_no ?? priorApp.applicationNo ?? '—';
+            const priorPeriod = priorApp.period_to || priorApp.periodTo || priorApp.application_date || '—';
+            const priorStatusColor = { Paid: '#059669', Approved: '#059669', Pending: '#d97706', Overdue: '#dc2626', Draft: '#64748b', Submitted: '#3b82f6' }[priorApp.status] || '#64748b';
+            const pScheduled = priorLines.reduce((s, li) => s + li.scheduledValue, 0);
+            const pPrev = priorLines.reduce((s, li) => s + li.previousApplication, 0);
+            const pThis = priorLines.reduce((s, li) => s + li.thisPeriod, 0);
+            const pMat = priorLines.reduce((s, li) => s + li.materialsStored, 0);
+            const pTotal = priorLines.reduce((s, li) => s + li.totalCompleted, 0);
+            const pBalance = priorLines.reduce((s, li) => s + li.balanceToFinish, 0);
+            const pRetainage = priorLines.reduce((s, li) => s + li.retainage, 0);
+            const pPct = pScheduled > 0 ? (pTotal / pScheduled) * 100 : 0;
+            return (
+              <div key={`prior-${priorIdx}`} style={{ marginBottom: 28, opacity: 0.85 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                  <div style={{ fontSize: '0.85rem', fontWeight: 700, color: '#475569' }}>
+                    Application #{priorAppNo}
+                    <span style={{ marginLeft: 8, fontSize: '0.75rem', fontWeight: 400, color: '#94a3b8' }}>
+                      Period to {typeof priorPeriod === 'string' && priorPeriod !== '—' ? new Date(priorPeriod).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : priorPeriod}
+                    </span>
+                  </div>
+                  <span style={{ background: priorStatusColor + '18', color: priorStatusColor, padding: '2px 10px', borderRadius: 999, fontSize: '0.7rem', fontWeight: 700 }}>
+                    {priorApp.status}
+                  </span>
+                </div>
+                <div style={{ overflowX: 'visible' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', ...outerBorder, fontSize: '0.72rem' }}>
+                    <thead>
+                      <tr style={{ background: '#f1f5f9' }}>
+                        <th style={{ ...cellBorderBold, textAlign: 'center', width: '4%' }}>A</th>
+                        <th style={{ ...cellBorderBold, textAlign: 'center', width: '22%' }}>B</th>
+                        <th style={{ ...cellBorderBold, textAlign: 'center', width: '11%' }}>C</th>
+                        <th style={{ ...cellBorderBold, textAlign: 'center', width: '11%' }}>D</th>
+                        <th style={{ ...cellBorderBold, textAlign: 'center', width: '11%' }}>E</th>
+                        <th style={{ ...cellBorderBold, textAlign: 'center', width: '9%' }}>F</th>
+                        <th style={{ ...cellBorderBold, textAlign: 'center', width: '11%' }}>G</th>
+                        <th style={{ ...cellBorderBold, textAlign: 'center', width: '5%' }}>%</th>
+                        <th style={{ ...cellBorderBold, textAlign: 'center', width: '10%' }}>H</th>
+                        <th style={{ ...cellBorderBold, textAlign: 'center', width: '9%' }}>I</th>
+                      </tr>
+                      <tr style={{ background: '#f8fafc' }}>
+                        <th style={{ ...cellBorder, textAlign: 'center', fontWeight: 600, fontSize: '0.65rem' }}>Item</th>
+                        <th style={{ ...cellBorder, textAlign: 'center', fontWeight: 600, fontSize: '0.65rem' }}>Description of Work</th>
+                        <th style={{ ...cellBorder, textAlign: 'center', fontWeight: 600, fontSize: '0.65rem' }}>Scheduled Value</th>
+                        <th style={{ ...cellBorder, textAlign: 'center', fontWeight: 600, fontSize: '0.65rem' }}>Work Completed Previously</th>
+                        <th style={{ ...cellBorder, textAlign: 'center', fontWeight: 600, fontSize: '0.65rem' }}>This Period</th>
+                        <th style={{ ...cellBorder, textAlign: 'center', fontWeight: 600, fontSize: '0.65rem' }}>Materials Stored</th>
+                        <th style={{ ...cellBorder, textAlign: 'center', fontWeight: 600, fontSize: '0.65rem' }}>Total Completed & Stored</th>
+                        <th style={{ ...cellBorder, textAlign: 'center', fontWeight: 600, fontSize: '0.65rem' }}>%</th>
+                        <th style={{ ...cellBorder, textAlign: 'center', fontWeight: 600, fontSize: '0.65rem' }}>Balance to Finish</th>
+                        <th style={{ ...cellBorder, textAlign: 'center', fontWeight: 600, fontSize: '0.65rem' }}>Retainage</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {priorLines.map((li, idx) => (
+                        <tr key={idx}>
+                          <td style={{ ...cellBorder, textAlign: 'center' }}>{li.itemNo || idx + 1}</td>
+                          <td style={cellBorder}>{li.description}</td>
+                          <td style={{ ...cellBorder, textAlign: 'right' }}>{formatCurrency(li.scheduledValue)}</td>
+                          <td style={{ ...cellBorder, textAlign: 'right' }}>{formatCurrency(li.previousApplication)}</td>
+                          <td style={{ ...cellBorder, textAlign: 'right' }}>{formatCurrency(li.thisPeriod)}</td>
+                          <td style={{ ...cellBorder, textAlign: 'right' }}>{formatCurrency(li.materialsStored)}</td>
+                          <td style={{ ...cellBorder, textAlign: 'right' }}>{formatCurrency(li.totalCompleted)}</td>
+                          <td style={{ ...cellBorder, textAlign: 'center' }}>{li.percentComplete.toFixed(1)}%</td>
+                          <td style={{ ...cellBorder, textAlign: 'right' }}>{formatCurrency(li.balanceToFinish)}</td>
+                          <td style={{ ...cellBorder, textAlign: 'right' }}>{formatCurrency(li.retainage)}</td>
+                        </tr>
+                      ))}
+                      <tr style={{ background: '#f8fafc', fontWeight: 700 }}>
+                        <td style={{ ...cellBorderBold, textAlign: 'center' }} colSpan={2}>GRAND TOTALS</td>
+                        <td style={{ ...cellBorderBold, textAlign: 'right' }}>{formatCurrency(pScheduled)}</td>
+                        <td style={{ ...cellBorderBold, textAlign: 'right' }}>{formatCurrency(pPrev)}</td>
+                        <td style={{ ...cellBorderBold, textAlign: 'right' }}>{formatCurrency(pThis)}</td>
+                        <td style={{ ...cellBorderBold, textAlign: 'right' }}>{formatCurrency(pMat)}</td>
+                        <td style={{ ...cellBorderBold, textAlign: 'right' }}>{formatCurrency(pTotal)}</td>
+                        <td style={{ ...cellBorderBold, textAlign: 'center' }}>{pPct.toFixed(1)}%</td>
+                        <td style={{ ...cellBorderBold, textAlign: 'right' }}>{formatCurrency(pBalance)}</td>
+                        <td style={{ ...cellBorderBold, textAlign: 'right' }}>{formatCurrency(pRetainage)}</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            );
+          })}
+
+          {/* Divider between prior and current */}
+          {priorPayApps.length > 0 && (
+            <div style={{ borderTop: '3px solid #f07030', marginBottom: 20, paddingTop: 12 }}>
+              <div style={{ fontSize: '0.85rem', fontWeight: 800, color: '#f07030', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                Current Application #{invoice.applicationNo}
+              </div>
+            </div>
+          )}
+
+          {/* CURRENT CONTINUATION TABLE */}
+          <div style={{ overflowX: 'visible' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', ...outerBorder, fontSize: '0.72rem' }}>
               <thead>
                 <tr style={{ background: '#f1f5f9' }}>
@@ -913,7 +1194,7 @@ export default function InvoiceDetail() {
                     <div style={{ fontSize: '0.9rem', fontWeight: 700, marginBottom: 8, color: '#0f172a', borderBottom: '2px solid #f59e0b', paddingBottom: 4, display: 'inline-block' }}>
                       Prior Payments
                     </div>
-                    <div style={{ overflowX: 'auto' }}>
+                    <div style={{ overflowX: 'visible' }}>
                       <table style={{ width: '100%', borderCollapse: 'collapse', ...outerBorder, fontSize: '0.72rem' }}>
                         {backupTableHead}
                         <tbody>
@@ -936,7 +1217,7 @@ export default function InvoiceDetail() {
                     <div style={{ fontSize: '0.9rem', fontWeight: 700, marginBottom: 8, color: '#0f172a', borderBottom: '2px solid #f59e0b', paddingBottom: 4, display: 'inline-block' }}>
                       New Payment Requests (Draw #{currentDrawNo})
                     </div>
-                    <div style={{ overflowX: 'auto' }}>
+                    <div style={{ overflowX: 'visible' }}>
                       <table style={{ width: '100%', borderCollapse: 'collapse', ...outerBorder, fontSize: '0.72rem' }}>
                         {backupTableHead}
                         <tbody>
@@ -955,6 +1236,70 @@ export default function InvoiceDetail() {
               </>
             );
           })()}
+        </div>
+      )}
+
+      {/* ================================================================
+          PAYMENT MODAL
+          ================================================================ */}
+      {paymentModal && invoice && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div style={{ background: '#fff', borderRadius: 12, padding: '2rem', width: 420, maxWidth: '90vw', boxShadow: '0 20px 60px rgba(0,0,0,0.2)' }}>
+            <h2 style={{ margin: '0 0 0.25rem', fontSize: '1.1rem', fontWeight: 800, color: '#0f172a' }}>Record Payment</h2>
+            <p style={{ margin: '0 0 1.5rem', fontSize: '0.85rem', color: '#64748b' }}>
+              Application #{invoice.applicationNo} — Net Due: {formatCurrency(invoice.currentPaymentDue)}
+            </p>
+
+            {invoice.totalRetainage > 0 && (
+              <div style={{ background: '#f5f3ff', border: '1px solid #c4b5fd', borderRadius: 8, padding: '0.75rem 1rem', marginBottom: '1.25rem', fontSize: '0.8rem', color: '#7c3aed' }}>
+                <strong>Retainage held:</strong> {formatCurrency(invoice.totalRetainage)} — status stays <em>Partial</em> until full amount is paid.
+              </div>
+            )}
+
+            <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 700, color: '#374151', marginBottom: 6 }}>
+              Amount Being Paid
+            </label>
+            <input
+              type="number"
+              min="0"
+              step="0.01"
+              value={paymentAmount}
+              onChange={(e) => setPaymentAmount(e.target.value)}
+              style={{ width: '100%', padding: '0.6rem 0.75rem', border: '1px solid #d1d5db', borderRadius: 8, fontSize: '0.95rem', boxSizing: 'border-box', outline: 'none' }}
+              autoFocus
+            />
+
+            {(() => {
+              const amt = parseFloat(paymentAmount) || 0;
+              const due = invoice.currentPaymentDue || 0;
+              const remaining = due - amt;
+              const isFull = amt >= due;
+              if (amt <= 0) return null;
+              return (
+                <div style={{ marginTop: '0.75rem', padding: '0.75rem', background: isFull ? '#dcfce7' : '#fffbeb', borderRadius: 8, fontSize: '0.8rem', color: isFull ? '#16a34a' : '#d97706', fontWeight: 600 }}>
+                  {isFull
+                    ? 'Full payment — invoice will be marked Paid.'
+                    : `Partial payment — ${formatCurrency(remaining)} remaining. Status stays Partial.`}
+                </div>
+              );
+            })()}
+
+            <div style={{ display: 'flex', gap: '0.75rem', marginTop: '1.5rem', justifyContent: 'flex-end' }}>
+              <button
+                onClick={() => { setPaymentModal(false); setPaymentAmount(''); }}
+                style={{ padding: '8px 18px', borderRadius: 8, border: '1px solid #e2e8f0', background: '#fff', color: '#64748b', cursor: 'pointer', fontWeight: 600, fontSize: '0.875rem' }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleRecordPayment}
+                disabled={!(parseFloat(paymentAmount) > 0) || actionLoading === 'paid'}
+                style={{ padding: '8px 22px', borderRadius: 8, border: 'none', background: '#16a34a', color: '#fff', cursor: 'pointer', fontWeight: 700, fontSize: '0.875rem', opacity: !(parseFloat(paymentAmount) > 0) || actionLoading === 'paid' ? 0.5 : 1 }}
+              >
+                {actionLoading === 'paid' ? 'Saving…' : 'Confirm Payment'}
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

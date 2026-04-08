@@ -12,7 +12,8 @@ import {
   FileText,
   DollarSign,
 } from 'lucide-react';
-import { clients, projects, communicationLog, documents, invoices } from '../data/mockData';
+import { clientService, projectService, communicationService, documentService, invoiceService } from '../services/supabaseService';
+import { useSupabase } from '../hooks/useSupabase';
 
 const projectStatusBadge = {
   'In Progress': 'badge-blue',
@@ -39,7 +40,19 @@ function ClientDetail() {
   const { id } = useParams();
   const [activeTab, setActiveTab] = useState('projects');
 
-  const client = clients.find((c) => c.id === id);
+  const { data: clients, loading: loadingClients } = useSupabase(clientService.list);
+  const { data: allProjects, loading: loadingProjects } = useSupabase(projectService.list);
+  const { data: allComms, loading: loadingComms } = useSupabase(communicationService.list);
+  const { data: allDocs, loading: loadingDocs } = useSupabase(documentService.list);
+  const { data: allInvoices, loading: loadingInvoices } = useSupabase(invoiceService.list);
+
+  const loading = loadingClients || loadingProjects || loadingComms || loadingDocs || loadingInvoices;
+
+  if (loading) {
+    return <div style={{ padding: '2rem', textAlign: 'center', color: '#9ca3af' }}>Loading client details...</div>;
+  }
+
+  const client = (clients || []).find((c) => c.id === id);
 
   if (!client) {
     return (
@@ -54,11 +67,11 @@ function ClientDetail() {
     );
   }
 
-  const clientProjects = projects.filter((p) => p.clientId === client.id);
-  const clientComms = communicationLog.filter((c) => c.clientId === client.id);
+  const clientProjects = (allProjects || []).filter((p) => p.client_id === client.id);
+  const clientComms = (allComms || []).filter((c) => c.client_id === client.id);
   const clientProjectIds = clientProjects.map((p) => p.id);
-  const clientDocs = documents.filter((d) => clientProjectIds.includes(d.projectId));
-  const clientInvoices = invoices.filter((i) => i.clientId === client.id);
+  const clientDocs = (allDocs || []).filter((d) => clientProjectIds.includes(d.project_id));
+  const clientInvoices = (allInvoices || []).filter((i) => i.client_id === client.id || i.owner_name === client.name);
 
   const formatCurrency = (val) =>
     val.toLocaleString('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 0 });
@@ -234,8 +247,8 @@ function ClientDetail() {
                     <td className="table-cell">
                       <span className="badge-gray">{doc.category}</span>
                     </td>
-                    <td className="table-cell">{doc.project}</td>
-                    <td className="table-cell" style={{ whiteSpace: 'nowrap' }}>{doc.uploadDate}</td>
+                    <td className="table-cell">{doc.project_name || doc.project}</td>
+                    <td className="table-cell" style={{ whiteSpace: 'nowrap' }}>{doc.upload_date || doc.uploadDate}</td>
                     <td className="table-cell">{doc.size}</td>
                   </tr>
                 ))}
@@ -266,10 +279,10 @@ function ClientDetail() {
                 {clientInvoices.map((inv) => (
                   <tr key={inv.id}>
                     <td className="table-cell" style={{ fontWeight: 600 }}>{inv.id}</td>
-                    <td className="table-cell">{inv.project}</td>
-                    <td className="table-cell">{formatCurrency(inv.amount)}</td>
-                    <td className="table-cell" style={{ whiteSpace: 'nowrap' }}>{inv.issueDate}</td>
-                    <td className="table-cell" style={{ whiteSpace: 'nowrap' }}>{inv.dueDate}</td>
+                    <td className="table-cell">{inv.project_name || inv.project}</td>
+                    <td className="table-cell">{formatCurrency(inv.current_payment_due || inv.amount || 0)}</td>
+                    <td className="table-cell" style={{ whiteSpace: 'nowrap' }}>{inv.application_date || inv.issueDate}</td>
+                    <td className="table-cell" style={{ whiteSpace: 'nowrap' }}>{inv.period_to || inv.dueDate}</td>
                     <td className="table-cell">
                       <span className={invoiceStatusBadge[inv.status] || 'badge-gray'}>{inv.status}</span>
                     </td>

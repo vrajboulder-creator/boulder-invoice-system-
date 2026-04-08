@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ArrowLeft, Upload, FileText, X } from 'lucide-react';
-import { projects } from '../data/mockData';
+import { projectService } from '../services/supabaseService';
+import { useSupabase } from '../hooks/useSupabase';
 
 const categories = [
   'Plans', 'Reports', 'Survey', 'Permits', 'Insurance',
@@ -10,6 +11,7 @@ const categories = [
 
 export default function DocumentUpload() {
   const navigate = useNavigate();
+  const { data: projects } = useSupabase(projectService.list);
   const [selectedFile, setSelectedFile] = useState(null);
   const [documentName, setDocumentName] = useState('');
   const [projectId, setProjectId] = useState('');

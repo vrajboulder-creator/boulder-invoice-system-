@@ -3,7 +3,6 @@ import { Link } from 'react-router-dom';
 import { FileText, Plus, AlertCircle, DollarSign, Eye, Download, Filter, Loader2 } from 'lucide-react';
 import { lienWaiverService } from '../services/supabaseService';
 import { useSupabase } from '../hooks/useSupabase';
-import { lienWaivers as mockLienWaivers } from '../data/mockData';
 
 const formatCurrency = (amount) =>
   new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(amount);
@@ -40,7 +39,7 @@ function normalizeWaiver(w) {
 }
 
 export default function LienWaivers() {
-  const { data: rawWaivers, loading } = useSupabase(lienWaiverService.list, mockLienWaivers);
+  const { data: rawWaivers, loading } = useSupabase(lienWaiverService.list);
 
   const [projectFilter, setProjectFilter] = useState('All');
   const [statusFilter, setStatusFilter] = useState('All');

@@ -1,26 +1,32 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { Link } from 'react-router-dom';
-import { BookOpen, Search, Calendar, Users, ChevronDown, ChevronRight, FolderKanban } from 'lucide-react';
-import { projects as mockProjects } from '../data/mockData';
-
-// Flatten all daily logs from all projects
-const allLogs = mockProjects
-  .filter((p) => p.dailyLogs && p.dailyLogs.length > 0)
-  .flatMap((p) =>
-    p.dailyLogs.map((log) => ({
-      ...log,
-      projectId: p.id,
-      project: p.name,
-      client: p.client,
-      phase: p.phase,
-    }))
-  )
-  .sort((a, b) => new Date(b.date) - new Date(a.date));
+import { BookOpen, Search, Calendar, Users, ChevronDown, ChevronRight, FolderKanban, Loader2 } from 'lucide-react';
+import { projectService } from '../services/supabaseService';
+import { useSupabase } from '../hooks/useSupabase';
 
 export default function DailyLogs() {
   const [search, setSearch] = useState('');
   const [projectFilter, setProjectFilter] = useState('All');
   const [expanded, setExpanded] = useState({});
+
+  const { data: projects, loading } = useSupabase(projectService.list);
+
+  // Flatten all daily logs from all projects
+  const allLogs = useMemo(() =>
+    projects
+      .filter((p) => p.dailyLogs && p.dailyLogs.length > 0)
+      .flatMap((p) =>
+        p.dailyLogs.map((log) => ({
+          ...log,
+          projectId: p.id,
+          project: p.name,
+          client: p.client,
+          phase: p.phase,
+        }))
+      )
+      .sort((a, b) => new Date(b.date) - new Date(a.date)),
+    [projects]
+  );
 
   const projectNames = ['All', ...Array.from(new Set(allLogs.map((l) => l.project)))];
 
@@ -33,6 +39,16 @@ export default function DailyLogs() {
   });
 
   const toggle = (key) => setExpanded((prev) => ({ ...prev, [key]: !prev[key] }));
+
+  if (loading) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: 300, gap: 12 }}>
+        <Loader2 size={36} style={{ color: '#2563eb', animation: 'spin 1s linear infinite' }} />
+        <span style={{ color: '#64748b', fontSize: '0.875rem' }}>Loading daily logs...</span>
+        <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+      </div>
+    );
+  }
 
   // Group by date
   const byDate = filtered.reduce((acc, log) => {
@@ -58,7 +74,7 @@ export default function DailyLogs() {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '1rem', marginBottom: '1.5rem' }}>
         {[
           { label: 'Total Entries', value: allLogs.length, color: '#3b82f6' },
-          { label: 'Active Projects', value: mockProjects.filter((p) => p.dailyLogs?.length > 0).length, color: '#059669' },
+          { label: 'Active Projects', value: projects.filter((p) => p.dailyLogs?.length > 0).length, color: '#059669' },
           { label: 'Latest Entry', value: allLogs[0]?.date || '—', color: '#f07030' },
         ].map(({ label, value, color }) => (
           <div key={label} className="card" style={{ padding: '1.25rem' }}>

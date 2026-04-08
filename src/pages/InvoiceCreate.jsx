@@ -1,9 +1,8 @@
-import { useState, useMemo } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
-import { ArrowLeft, Plus, X, Save, Send, FileText, Loader2, Database, HardDrive, DollarSign, Calculator, HardHat } from 'lucide-react';
-import { clients as mockClients, projects as mockProjects, invoices as mockInvoices, contracts as mockContracts, changeOrders as mockChangeOrders } from '../data/mockData';
-import { invoiceService, clientService, projectService } from '../services/supabaseService';
-import { useSupabase } from '../hooks/useSupabase';
+import { useState, useEffect } from 'react';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { ArrowLeft, Plus, X, Save, Send, FileText, Loader2, DollarSign, Calculator, HardHat } from 'lucide-react';
+import { invoiceService, clientService, projectService, contractService, changeOrderService, generateInvoiceId } from '../services/supabaseService';
+import { useSupabase, useSupabaseById } from '../hooks/useSupabase';
 
 const fmt = (v) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(v || 0);
 const todayStr = () => new Date().toISOString().split('T')[0];
@@ -14,34 +13,46 @@ const emptyLineItem = () => ({ description: '', scheduledValue: 0, previouslyCom
 
 export default function InvoiceCreate() {
   const navigate = useNavigate();
+  const { contractId: routeContractId } = useParams(); // from /contracts/:contractId/invoices/create
   const [searchParams] = useSearchParams();
-  const preloadContractId = searchParams.get('contractId');
-  const preloadContract = preloadContractId ? mockContracts.find((c) => c.id === preloadContractId) : null;
+  const preloadContractId = routeContractId || searchParams.get('contractId');
+  const { data: liveContract } = useSupabaseById(contractService.getById, preloadContractId);
+  const preloadContract = liveContract;
 
   // Edit mode — load existing Draft/Rejected invoice
   const editId = searchParams.get('editId');
-  const editInvoice = editId ? mockInvoices.find((i) => i.id === editId) : null;
+  const { data: editInvoice } = useSupabaseById(invoiceService.getById, editId);
 
-  const { data: clients, usingMock: clientsMock } = useSupabase(clientService.list, mockClients);
-  const { data: projectsList, usingMock: projectsMock } = useSupabase(projectService.list, mockProjects);
+  // Live preview of next invoice ID
+  const [invoicePreviewId, setInvoicePreviewId] = useState('');
+  useEffect(() => {
+    if (editInvoice) return;
+    generateInvoiceId(preloadContractId || null).then(setInvoicePreviewId).catch(() => setInvoicePreviewId(''));
+  }, [preloadContractId, editInvoice]);
 
-  const nextInvoiceNumber = useMemo(() => {
-    const allNumbers = mockInvoices.map((inv) => {
-      const match = (inv.invoice_number || inv.id || '').match(/(\d+)$/);
-      return match ? parseInt(match[1], 10) : 0;
-    });
-    return `INV-${String(Math.max(...allNumbers, 10) + 1).padStart(3, '0')}`;
-  }, []);
+  const { data: clients } = useSupabase(clientService.list);
+  const { data: projectsList } = useSupabase(projectService.list);
+  const { data: changeOrders } = useSupabase(changeOrderService.list);
 
-  // How many pay apps already exist for this contract — determines next app number
-  const existingAppCount = preloadContractId
-    ? mockInvoices.filter((i) => i.contractId === preloadContractId).length
-    : 0;
+  const [nextInvoiceNumber, setNextInvoiceNumber] = useState('INV-001');
 
-  // Auto-calculate previous payments from prior invoices on the same contract
-  const autoPreviousPayments = preloadContractId
-    ? mockInvoices.filter((i) => i.contractId === preloadContractId).reduce((sum, i) => sum + (i.amount || 0), 0)
-    : 0;
+  useEffect(() => {
+    if (editId) return;
+    invoiceService.nextNumber()
+      .then((n) => {
+        const num = `INV-${String(n).padStart(3, '0')}`;
+        setNextInvoiceNumber(num);
+        setInvoiceNumber(num);
+      })
+      .catch((err) => setSubmitError(err.message));
+  }, [editId]);
+
+  // How many pay apps already exist for this contract — use live nextNumber (set async)
+  // existingAppCount is only used for display in the header bar
+  const [existingAppCount, setExistingAppCount] = useState(0);
+
+  // Initial previous payments = 0 (will be overwritten by Supabase fetch in useEffect)
+  const autoPreviousPayments = 0;
 
   // Pre-populate SOV line items — from edit invoice, contract, or blank
   const initialLineItems = (() => {
@@ -56,18 +67,12 @@ export default function InvoiceCreate() {
       }));
     }
     if (!preloadContract) return [emptyLineItem()];
-    const priorInvoices = mockInvoices.filter((i) => i.contractId === preloadContractId);
-    return preloadContract.lineItems.map((li, idx) => {
-      const previouslyCompleted = priorInvoices.reduce((sum, inv) => {
-        const match = (inv.lineItems || []).find((a) => a.itemNo === idx + 1 || a.description === li.description);
-        return sum + (match ? (match.thisPeriod || 0) : 0);
-      }, 0);
-      return { description: li.description, scheduledValue: li.amount, previouslyCompleted, thisPeriod: 0, materialsStored: 0 };
-    });
+    // Line items will be populated from live contract data in the useEffect below
+    return [emptyLineItem()];
   })();
 
   // ── Invoice Header ──
-  const [invoiceNumber, setInvoiceNumber] = useState(editInvoice?.id || nextInvoiceNumber);
+  const [invoiceNumber, setInvoiceNumber] = useState(editInvoice?.invoice_number || editInvoice?.id || nextInvoiceNumber);
   const [issueDate, setIssueDate] = useState(editInvoice?.issueDate || editInvoice?.issue_date || todayStr());
   const [periodTo, setPeriodTo] = useState(editInvoice?.periodTo || editInvoice?.period_to || todayStr());
   const [dueDate, setDueDate] = useState(editInvoice?.dueDate || editInvoice?.due_date || plus30());
@@ -86,7 +91,10 @@ export default function InvoiceCreate() {
   const [isSubcontractorVersion, setIsSubcontractorVersion] = useState(editInvoice?.is_subcontractor_version ?? false);
 
   // ── G702 Contract Fields ──
-  const [originalContractSum, setOriginalContractSum] = useState(editInvoice?.originalContractSum || editInvoice?.original_contract_sum || preloadContract?.contractValue || '');
+  const [originalContractSum, setOriginalContractSum] = useState(
+    editInvoice?.originalContractSum || editInvoice?.original_contract_sum ||
+    preloadContract?.contract_value || preloadContract?.contractValue || ''
+  );
   const [netChangeOrders, setNetChangeOrders] = useState(editInvoice?.netChangeOrders || editInvoice?.net_change_orders || 0);
   const [retainagePercent, setRetainagePercent] = useState(editInvoice?.retainagePercent || editInvoice?.retainage_percent || 2.5);
   const [storedMaterialsRetainage, setStoredMaterialsRetainage] = useState(0);
@@ -105,6 +113,66 @@ export default function InvoiceCreate() {
   const [notes, setNotes] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState(null);
+
+  // ── Sync state from live contract once it loads from Supabase ──
+  useEffect(() => {
+    if (!liveContract || editId) return;
+    const cv = liveContract.contract_value ?? liveContract.contractValue;
+    if (cv) setOriginalContractSum(cv);
+    if (liveContract.start_date || liveContract.startDate)
+      setContractDate(liveContract.start_date || liveContract.startDate);
+    if (liveContract.client_id || liveContract.clientId)
+      setClientId(liveContract.client_id || liveContract.clientId);
+    if (liveContract.project_id || liveContract.projectId)
+      setProjectId(liveContract.project_id || liveContract.projectId);
+
+    // Pre-populate SOV from contract line items with previouslyCompleted from prior pay apps
+    const contractLineItems = liveContract.contract_line_items || liveContract.lineItems || [];
+    if (contractLineItems.length === 0) return;
+
+    // Fetch all prior pay apps for this contract sorted by application_no
+    invoiceService.listByContract(liveContract.id).then((allApps) => {
+      const priorApps = (allApps || [])
+        .filter(app => app.id !== editId)
+        .sort((a, b) => (a.application_no ?? 0) - (b.application_no ?? 0));
+
+      // Update header app count from live data
+      setExistingAppCount(priorApps.length);
+
+      setLineItems(contractLineItems.map((li) => {
+        // Sum this_period + materials_stored across ALL prior apps per line item
+        const previouslyCompleted = priorApps.reduce((sum, app) => {
+          const appLines = app.pay_application_line_items || app.lineItems || [];
+          const match = appLines.find((a) => a.description === li.description);
+          if (!match) return sum;
+          const tp = parseFloat(match.this_period ?? match.thisPeriod ?? 0);
+          const ms = parseFloat(match.materials_stored ?? match.materialsStored ?? 0);
+          return sum + tp + ms;
+        }, 0);
+        return {
+          description: li.description || '',
+          scheduledValue: parseFloat(li.amount) || 0,
+          previouslyCompleted,
+          thisPeriod: 0,
+          materialsStored: 0,
+        };
+      }));
+
+      // Line 7: sum of each prior app's current_payment_due (= net paid that period)
+      const totalPreviousCertified = priorApps.reduce((sum, app) =>
+        sum + parseFloat(app.current_payment_due ?? app.amount ?? 0), 0);
+      setPreviousPayments(totalPreviousCertified);
+    }).catch(() => {
+      // Fallback: populate with zeros if fetch fails
+      setLineItems(contractLineItems.map((li) => ({
+        description: li.description || '',
+        scheduledValue: parseFloat(li.amount) || 0,
+        previouslyCompleted: 0,
+        thisPeriod: 0,
+        materialsStored: 0,
+      })));
+    });
+  }, [liveContract, editId]);
 
   // ── Derived: selected client/project info ──
   const filteredProjects = clientId ? projectsList.filter(p => (p.clientId || p.client_id) === clientId) : [];
@@ -144,13 +212,16 @@ export default function InvoiceCreate() {
   const totalRetainageAmount = lineItems.reduce((s, li) => s + lineRetainage(li), 0);
   const grandTotalPercent = totalScheduledValue > 0 ? ((totalCompletedAndStored / totalScheduledValue) * 100) : 0;
 
+  // AIA G702 Lines 5-9
+  // Line 5a retainage applies to ALL cumulative completed work (prev + this period)
   const retainageOnCompleted = totalCompletedAndStored * ((parseFloat(retainagePercent) || 0) / 100); // Line 5a
   const retainageOnStored = totalMaterialsStored * ((parseFloat(storedMaterialsRetainage) || 0) / 100); // Line 5b
   const totalRetainage = retainageOnCompleted + retainageOnStored; // Line 5 total
-  const totalEarnedLessRetainage = totalCompletedAndStored - totalRetainage; // Line 6
-  const prevPayments = parseFloat(previousPayments) || 0; // Line 7
+  const totalEarnedLessRetainage = totalCompletedAndStored - totalRetainage; // Line 6: cumulative earned net
+  const prevPayments = parseFloat(previousPayments) || 0; // Line 7: prior certified amounts
+  // Line 8 = cumulative net earned - previously certified net = THIS period's net payment due
   const currentPaymentDue = totalEarnedLessRetainage - prevPayments; // Line 8
-  const balanceToFinish = contractSumToDate - totalEarnedLessRetainage; // Line 9
+  const balanceToFinish = contractSumToDate - totalCompletedAndStored; // Line 9 (before retainage)
 
   // Change Order summary
   const coTotalAdditions = (parseFloat(coPrevAdditions) || 0) + (parseFloat(coThisAdditions) || 0);
@@ -166,7 +237,7 @@ export default function InvoiceCreate() {
   const importChangeOrders = () => {
     const pid = projectId || preloadContract?.projectId;
     if (!pid) return;
-    const cos = mockChangeOrders.filter((co) => co.projectId === pid && co.status === 'Approved');
+    const cos = changeOrders.filter((co) => (co.projectId || co.project_id) === pid && co.status === 'Approved');
     if (!cos.length) { alert('No approved change orders found for this project.'); return; }
     const coItems = cos.map((co) => ({
       description: `${co.id}: ${co.description}`,
@@ -197,16 +268,21 @@ export default function InvoiceCreate() {
     setSubmitError(null);
     try {
       // Find client name/address for the G702 header
-      const client = clients.find(c => c.id === clientId);
-      const project = projectsList.find(p => p.id === projectId);
+      // When from a contract, resolve client from preloadContract.clientId
+      const resolvedClientId = clientId || preloadContract?.clientId || null;
+      const client = clients.find(c => c.id === resolvedClientId);
+      const resolvedProjectId = projectId || preloadContract?.projectId || null;
+      const project = projectsList.find(p => p.id === resolvedProjectId);
 
       const invoiceRow = {
         invoice_number: invoiceNumber,
-        client_id: clientId || null,
-        client_name: client ? (client.company || client.name) : null,
+        contract_id: preloadContractId || null,
+        client_id: resolvedClientId,
+        client_name: client ? (client.company || client.name) : (preloadContract?.company || preloadContract?.client || null),
         client_address: client ? client.address : null,
-        project_id: projectId || null,
-        project_name: project ? project.name : null,
+        project_id: resolvedProjectId,
+        project_name: project ? project.name : (preloadContract?.project_name || preloadContract?.project || null),
+        current_payment_due: currentPaymentDue,
         amount: currentPaymentDue,
         issue_date: issueDate,
         period_to: periodTo,
@@ -251,23 +327,21 @@ export default function InvoiceCreate() {
 
       if (editId) {
         // Edit mode — update existing invoice
-        await invoiceService.updateStatus(editId, status);
-        // Also update the pay app row fields via a generic update
-        try {
-          const { supabase } = await import('../lib/supabase');
-          await supabase.from('pay_applications').update(invoiceRow).eq('id', editId);
-          await supabase.from('pay_application_line_items').delete().eq('pay_application_id', editId);
-          if (lineItemRows.length > 0) {
-            const rows = lineItemRows.map((li, i) => ({ ...li, pay_application_id: editId, item_no: i + 1, sort_order: i }));
-            await supabase.from('pay_application_line_items').insert(rows);
-          }
-        } catch (_) {
-          // Mock mode — Supabase not connected, just navigate
+        const { supabase } = await import('../lib/supabase');
+        const { error: updateErr } = await supabase.from('pay_applications').update({ ...invoiceRow, status }).eq('id', editId);
+        if (updateErr) throw updateErr;
+        await supabase.from('pay_application_line_items').delete().eq('pay_application_id', editId);
+        if (lineItemRows.length > 0) {
+          const rows = lineItemRows.map((li, i) => ({ ...li, pay_application_id: editId, item_no: i + 1, sort_order: i }));
+          const { error: liErr } = await supabase.from('pay_application_line_items').insert(rows);
+          if (liErr) throw liErr;
         }
         navigate(`/invoices/${editId}`);
       } else {
         await invoiceService.create(invoiceRow, lineItemRows);
-        navigate('/invoices');
+        preloadContractId
+          ? navigate(`/contracts/${preloadContractId}`)
+          : navigate('/invoices');
       }
     } catch (err) {
       setSubmitError(err.message || 'Failed to save.');
@@ -276,7 +350,6 @@ export default function InvoiceCreate() {
     }
   };
 
-  const usingMock = clientsMock && projectsMock;
   const labelStyle = { display: 'block', fontSize: '0.7rem', fontWeight: 600, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 };
   const sectionTitle = { fontSize: '0.9375rem', fontWeight: 700, color: '#1e293b', marginBottom: '1rem', paddingBottom: '0.5rem', borderBottom: '2px solid #e2e8f0', display: 'flex', alignItems: 'center', gap: 8 };
   const calcRow = { display: 'flex', justifyContent: 'space-between', padding: '6px 0', fontSize: '0.8125rem', borderBottom: '1px solid #f1f5f9' };
@@ -289,19 +362,26 @@ export default function InvoiceCreate() {
       {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
         <div>
-          <button onClick={() => navigate('/invoices')} style={{ background: 'none', border: 'none', color: '#64748b', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.875rem', fontWeight: 500, padding: 0, marginBottom: 8 }}>
-            <ArrowLeft size={16} /> Back to Invoices
+          <button onClick={() => preloadContractId ? navigate(`/contracts/${preloadContractId}`) : navigate('/invoices')} style={{ background: 'none', border: 'none', color: '#64748b', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.875rem', fontWeight: 500, padding: 0, marginBottom: 8 }}>
+            <ArrowLeft size={16} /> {preloadContractId ? 'Back to Contract' : 'Back to Invoices'}
           </button>
           <h1 className="page-title">{editInvoice ? `Edit Invoice — ${editInvoice.id}` : 'Create Application for Payment'}</h1>
+          {/* Live invoice ID preview */}
+          {!editInvoice && (
+            <div style={{ marginTop: '0.375rem', padding: '0.5rem 0.875rem', background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: '0.5rem', fontSize: '0.8rem', color: '#166534', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+              <span style={{ color: '#94a3b8', fontWeight: 400 }}>Invoice ID:</span>
+              <code style={{ fontFamily: 'monospace', fontSize: '0.85rem', color: '#0f172a', background: '#fff', padding: '2px 8px', borderRadius: 4, border: '1px solid #e2e8f0' }}>
+                {invoicePreviewId || (preloadContractId ? `${preloadContractId}-D##` : `INV-${new Date().getFullYear()}-####`)}
+              </code>
+              {invoicePreviewId && preloadContractId && (
+                <span style={{ color: '#64748b', fontWeight: 400, fontSize: '0.75rem' }}>
+                  Draw #{invoicePreviewId.split('-D').pop()} on this contract
+                </span>
+              )}
+            </div>
+          )}
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <span style={{
-            display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 12px', borderRadius: 999, fontSize: '0.75rem', fontWeight: 600,
-            background: usingMock ? '#fef3c7' : '#dcfce7', color: usingMock ? '#92400e' : '#166534', border: `1px solid ${usingMock ? '#fbbf24' : '#22c55e'}`,
-          }}>
-            {usingMock ? <HardDrive size={12} /> : <Database size={12} />}
-            {usingMock ? 'Mock Data' : 'Live'}
-          </span>
           <button className="btn-secondary" onClick={() => handleSave('Draft')} disabled={submitting}>
             {submitting ? <Loader2 size={16} style={{ animation: 'spin 1s linear infinite' }} /> : <Save size={16} />} Save Draft
           </button>
@@ -329,17 +409,22 @@ export default function InvoiceCreate() {
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <FileText size={16} style={{ color: '#f07030', flexShrink: 0 }} />
             <span style={{ fontWeight: 700, color: '#92400e', fontSize: '0.875rem' }}>Billing against contract:</span>
-            <span style={{ fontWeight: 600, color: '#0f172a', fontSize: '0.875rem' }}>{preloadContract.title}</span>
+            <span style={{ fontWeight: 600, color: '#0f172a', fontSize: '0.875rem' }}>
+              {preloadContract.title || preloadContract.project_name || preloadContract.project || preloadContract.id}
+            </span>
           </div>
           <div style={{ display: 'flex', gap: '1.5rem', marginLeft: 'auto', flexWrap: 'wrap' }}>
             <span style={{ fontSize: '0.8rem', color: '#64748b' }}>
-              <span style={{ fontWeight: 600 }}>Contract Value:</span> {new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 0 }).format(preloadContract.contractValue)}
+              <span style={{ fontWeight: 600 }}>Contract Value:</span>{' '}
+              {new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 0 }).format(
+                parseFloat(preloadContract['contract_value'] ?? preloadContract.contractValue ?? 0)
+              )}
             </span>
             <span style={{ fontSize: '0.8rem', color: '#64748b' }}>
               <span style={{ fontWeight: 600 }}>Application #:</span> {existingAppCount + 1}
             </span>
             <span style={{ fontSize: '0.8rem', color: '#64748b' }}>
-              <span style={{ fontWeight: 600 }}>Type:</span> {preloadContract.type}
+              <span style={{ fontWeight: 600 }}>Type:</span> {preloadContract.contract_type || preloadContract.type || '—'}
             </span>
           </div>
         </div>
@@ -411,20 +496,45 @@ export default function InvoiceCreate() {
               <div><label style={labelStyle}>Contract Date</label><input className="input" type="date" value={contractDate} onChange={e => setContractDate(e.target.value)} /></div>
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '1rem', marginTop: '1rem' }}>
-              <div>
-                <label style={labelStyle}>Client (Submitted To)</label>
-                <select className="input" value={clientId} onChange={e => { setClientId(e.target.value); setProjectId(''); }} style={{ appearance: 'auto' }}>
-                  <option value="">Select client...</option>
-                  {clients.map(c => <option key={c.id} value={c.id}>{c.name} - {c.company}</option>)}
-                </select>
-              </div>
-              <div>
-                <label style={labelStyle}>Project (Job)</label>
-                <select className="input" value={projectId} onChange={e => handleProjectChange(e.target.value)} style={{ appearance: 'auto' }} disabled={!clientId}>
-                  <option value="">{clientId ? 'Select project...' : 'Select client first'}</option>
-                  {filteredProjects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-                </select>
-              </div>
+              {preloadContract ? (
+                <>
+                  <div>
+                    <label style={labelStyle}>Client (from Contract)</label>
+                    <div className="input" style={{ background: '#f8fafc', color: '#475569', cursor: 'not-allowed' }}>
+                      {preloadContract.client_name || preloadContract.company || preloadContract.client || '—'}
+                    </div>
+                    {(() => {
+                      const cId = preloadContract.client_id || preloadContract.clientId;
+                      const c = clients.find(x => x.id === cId);
+                      return c?.address ? <span style={{ fontSize: '0.7rem', color: '#94a3b8', marginTop: 3, display: 'block' }}>{c.address}</span> : null;
+                    })()}
+                  </div>
+                  <div>
+                    <label style={labelStyle}>Project (from Contract)</label>
+                    <div className="input" style={{ background: '#f8fafc', color: '#475569', cursor: 'not-allowed' }}>
+                      {preloadContract.project_name || preloadContract.project || preloadContract.projectName || '—'}
+                    </div>
+                    {(preloadContract.project_id || preloadContract.projectId) && <span style={{ fontSize: '0.7rem', color: '#94a3b8', marginTop: 3, display: 'block' }}>ID: {preloadContract.project_id || preloadContract.projectId}</span>}
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div>
+                    <label style={labelStyle}>Client (Submitted To)</label>
+                    <select className="input" value={clientId} onChange={e => { setClientId(e.target.value); setProjectId(''); }} style={{ appearance: 'auto' }}>
+                      <option value="">Select client...</option>
+                      {clients.map(c => <option key={c.id} value={c.id}>{c.name} - {c.company}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label style={labelStyle}>Project (Job)</label>
+                    <select className="input" value={projectId} onChange={e => handleProjectChange(e.target.value)} style={{ appearance: 'auto' }} disabled={!clientId}>
+                      <option value="">{clientId ? 'Select project...' : 'Select client first'}</option>
+                      {filteredProjects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                    </select>
+                  </div>
+                </>
+              )}
               <div>
                 <label style={labelStyle}>Payment Terms</label>
                 <select className="input" value={paymentTerms} onChange={e => handleTermsChange(e.target.value)} style={{ appearance: 'auto' }}>

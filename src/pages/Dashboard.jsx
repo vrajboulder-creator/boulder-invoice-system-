@@ -31,15 +31,13 @@ import {
   Cell,
 } from 'recharts';
 import {
-  projects,
-  invoices,
-  payApplications,
-  lienWaivers,
-  revenueData,
-  projectStatusData,
-  recentActivity,
-  currentUser,
-} from '../data/mockData';
+  projectService,
+  invoiceService,
+  payAppService,
+  lienWaiverService,
+  revenueService,
+} from '../services/supabaseService';
+import { useSupabase } from '../hooks/useSupabase';
 
 const formatCurrency = (value) =>
   new Intl.NumberFormat('en-US', {
@@ -49,6 +47,8 @@ const formatCurrency = (value) =>
     maximumFractionDigits: 0,
   }).format(value);
 
+const currentUser = { name: 'Mike Thornton', initials: 'MT' };
+
 const today = new Date();
 const formattedDate = today.toLocaleDateString('en-US', {
   weekday: 'long',
@@ -56,36 +56,6 @@ const formattedDate = today.toLocaleDateString('en-US', {
   month: 'long',
   day: 'numeric',
 });
-
-// Stat calculations
-const activeProjects = projects.filter((p) => p.status === 'In Progress').length;
-const pendingInvoices = invoices.filter((i) => i.status === 'Pending').length;
-
-// Cross-module outstanding: unpaid invoices + unapproved pay apps + unsigned lien waivers
-const outstandingInvoiceAmt = invoices
-  .filter((i) => i.status === 'Pending' || i.status === 'Overdue')
-  .reduce((s, i) => s + (i.amount || i.currentPaymentDue || 0), 0);
-const outstandingPayAppAmt = payApplications
-  .filter((pa) => pa.status === 'Submitted' || pa.status === 'Approved')
-  .reduce((s, pa) => s + (pa.currentPaymentDue || 0), 0);
-const unsignedWaivers = lienWaivers.filter((w) => w.status !== 'Signed').length;
-const totalCrossModuleOutstanding = outstandingInvoiceAmt + outstandingPayAppAmt;
-
-const marchRevenue = invoices
-  .filter((i) => {
-    if (i.status !== 'Paid' || !i.paidDate) return false;
-    const paid = new Date(i.paidDate);
-    return paid.getMonth() === 2 && paid.getFullYear() === 2026;
-  })
-  .reduce((sum, i) => sum + i.amount, 0);
-
-const sixtyDaysFromNow = new Date(today);
-sixtyDaysFromNow.setDate(sixtyDaysFromNow.getDate() + 60);
-const upcomingDeadlines = projects.filter((p) => {
-  if (p.status === 'Completed') return false;
-  const deadline = new Date(p.deadline);
-  return deadline >= today && deadline <= sixtyDaysFromNow;
-}).length;
 
 const STATUS_COLORS = {
   'In Progress': '#3b82f6',
@@ -163,7 +133,66 @@ const BarTooltip = ({ active, payload }) => {
 };
 
 export default function Dashboard() {
+  const { data: projects } = useSupabase(projectService.list);
+  const { data: invoices } = useSupabase(invoiceService.list);
+  const { data: payApplications } = useSupabase(payAppService.list);
+  const { data: lienWaivers } = useSupabase(lienWaiverService.list);
+  const { data: revenueData } = useSupabase(revenueService.list);
+
   const firstName = currentUser.name.split(' ')[0];
+
+  // Stat calculations
+  const activeProjects = projects.filter((p) => p.status === 'In Progress').length;
+  const pendingInvoices = invoices.filter((i) => i.status === 'Pending').length;
+
+  const outstandingInvoiceAmt = invoices
+    .filter((i) => i.status === 'Pending' || i.status === 'Overdue')
+    .reduce((s, i) => s + (i.amount || i.currentPaymentDue || i.current_payment_due || 0), 0);
+  const outstandingPayAppAmt = payApplications
+    .filter((pa) => pa.status === 'Submitted' || pa.status === 'Approved')
+    .reduce((s, pa) => s + (pa.currentPaymentDue || pa.current_payment_due || 0), 0);
+  const unsignedWaivers = lienWaivers.filter((w) => w.status !== 'Signed').length;
+  const totalCrossModuleOutstanding = outstandingInvoiceAmt + outstandingPayAppAmt;
+
+  const now = new Date();
+  const currentMonth = now.getMonth();
+  const currentYear = now.getFullYear();
+  const marchRevenue = invoices
+    .filter((i) => {
+      if (i.status !== 'Paid') return false;
+      const paidDate = i.paidDate || i.paid_date;
+      if (!paidDate) return false;
+      const paid = new Date(paidDate);
+      return paid.getMonth() === currentMonth && paid.getFullYear() === currentYear;
+    })
+    .reduce((sum, i) => sum + (i.amount || 0), 0);
+
+  const sixtyDaysFromNow = new Date(today);
+  sixtyDaysFromNow.setDate(sixtyDaysFromNow.getDate() + 60);
+  const upcomingDeadlines = projects.filter((p) => {
+    if (p.status === 'Completed') return false;
+    const deadline = new Date(p.deadline);
+    return deadline >= today && deadline <= sixtyDaysFromNow;
+  }).length;
+
+  // Compute project status data from live data
+  const statusCounts = {};
+  projects.forEach((p) => {
+    const s = p.status || 'Unknown';
+    statusCounts[s] = (statusCounts[s] || 0) + 1;
+  });
+  const projectStatusData = Object.entries(statusCounts).map(([status, count]) => ({ status, count }));
+
+  // Compute recent activity from invoices/projects
+  const recentActivity = invoices
+    .slice(0, 8)
+    .map((inv, idx) => ({
+      id: `act-${idx}`,
+      type: 'payment',
+      action: `Invoice ${inv.invoiceNumber || inv.invoice_number || inv.id} — ${inv.status}`,
+      user: inv.client || inv.client_name || 'System',
+      time: inv.date || inv.created_at || '',
+    }));
 
   return (
     <div style={{ padding: '0' }}>

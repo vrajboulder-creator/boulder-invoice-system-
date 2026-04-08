@@ -1,9 +1,8 @@
-import { useState, useCallback } from 'react';
+import { useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { ArrowLeft, Printer, Download, CheckCircle, Loader2 } from 'lucide-react';
 import { lienWaiverService } from '../services/supabaseService';
 import { useSupabaseById } from '../hooks/useSupabase';
-import { lienWaivers as mockLienWaivers } from '../data/mockData';
 import { downloadPdf } from '../utils/downloadPdf';
 
 const formatCurrency = (amount) =>
@@ -108,12 +107,7 @@ export default function LienWaiverDetail() {
   const { id } = useParams();
   const [signing, setSigning] = useState(false);
 
-  const mockFinder = useCallback(
-    (searchId) => mockLienWaivers.find((w) => w.id === searchId) || null,
-    [],
-  );
-
-  const { data: rawWaiver, loading, setData } = useSupabaseById(lienWaiverService.getById, id, mockFinder);
+  const { data: rawWaiver, loading, setData } = useSupabaseById(lienWaiverService.getById, id);
   const waiver = normalizeWaiver(rawWaiver);
 
   if (loading) {
@@ -221,6 +215,15 @@ export default function LienWaiverDetail() {
         <div style={{ flex: 1 }} />
 
         <span className={`badge ${statusBadge(waiver.status)}`}>{waiver.status}</span>
+
+        {waiver.relatedPayApp && (
+          <Link
+            to={`/invoices/${waiver.relatedPayApp}`}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '5px 12px', borderRadius: 6, border: '1px solid #e2e8f0', background: '#f8fafc', color: '#374151', fontWeight: 600, fontSize: '0.8rem', textDecoration: 'none' }}
+          >
+            View Invoice →
+          </Link>
+        )}
 
         {(waiver.status === 'Draft' || waiver.status === 'Pending Signature') && (
           <button

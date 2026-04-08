@@ -34,6 +34,7 @@ import ContractDetail from './pages/ContractDetail';
 import LienWaivers from './pages/LienWaivers';
 import LienWaiverDetail from './pages/LienWaiverDetail';
 import LienWaiverCreate from './pages/LienWaiverCreate';
+import G703Report from './pages/G703Report';
 import JobCosting from './pages/JobCosting';
 import Reports from './pages/Reports';
 import ClientPortal from './pages/ClientPortal';
@@ -110,6 +111,10 @@ function App() {
           <Route path="contracts" element={<Contracts />} />
           <Route path="contracts/create" element={<ContractCreate />} />
           <Route path="contracts/:id" element={<ContractDetail />} />
+          {/* Contract-scoped nested routes */}
+          <Route path="contracts/:contractId/invoices/create" element={<InvoiceCreate />} />
+          <Route path="contracts/:contractId/invoices/:invoiceId/lien-waiver/create" element={<LienWaiverCreate />} />
+          <Route path="contracts/:contractId/g703" element={<G703Report />} />
 
           {/* Lien Waivers */}
           <Route path="lien-waivers" element={<LienWaivers />} />

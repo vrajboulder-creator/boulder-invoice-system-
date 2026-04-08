@@ -5,7 +5,8 @@ import {
   ChevronRight,
   BarChart3,
 } from 'lucide-react';
-import { scheduleEvents, projects } from '../data/mockData';
+import { scheduleService, projectService } from '../services/supabaseService';
+import { useSupabase } from '../hooks/useSupabase';
 
 const DAYS_OF_WEEK = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const MONTH_NAMES = [
@@ -26,19 +27,19 @@ function formatDateKey(year, month, day) {
   return `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
 }
 
-function getEventsForDay(dateKey) {
+function getEventsForDay(dateKey, scheduleEvents) {
   return scheduleEvents.filter((ev) => {
     return dateKey >= ev.date && dateKey <= ev.endDate;
   });
 }
 
-function getTodaysEvents() {
-  return getEventsForDay(TODAY);
+function getTodaysEvents(scheduleEvents) {
+  return getEventsForDay(TODAY, scheduleEvents);
 }
 
 /* ── Calendar View ───────────────────────────────── */
 
-function CalendarView() {
+function CalendarView({ scheduleEvents }) {
   const year = CURRENT_YEAR;
   const month = CURRENT_MONTH;
   const firstDay = new Date(year, month, 1).getDay();
@@ -101,7 +102,7 @@ function CalendarView() {
             }
             const dateKey = formatDateKey(year, month, day);
             const isToday = dateKey === TODAY;
-            const dayEvents = getEventsForDay(dateKey);
+            const dayEvents = getEventsForDay(dateKey, scheduleEvents);
 
             return (
               <div
@@ -158,7 +159,7 @@ function CalendarView() {
 
 /* ── Gantt Chart View ────────────────────────────── */
 
-function GanttView() {
+function GanttView({ scheduleEvents }) {
   const daysInMonth = 30; // April 2026
   const days = Array.from({ length: daysInMonth }, (_, i) => i + 1);
 
@@ -254,8 +255,8 @@ function GanttView() {
 
 /* ── Right Sidebar ───────────────────────────────── */
 
-function TodaySidebar() {
-  const todayEvents = getTodaysEvents();
+function TodaySidebar({ scheduleEvents }) {
+  const todayEvents = getTodaysEvents(scheduleEvents);
 
   return (
     <div className="bg-white rounded-xl border border-gray-200 p-5">
@@ -313,6 +314,8 @@ function TodaySidebar() {
 
 export default function Scheduling() {
   const [view, setView] = useState('calendar');
+  const { data: scheduleEvents } = useSupabase(scheduleService.list);
+  const { data: projects } = useSupabase(projectService.list);
 
   return (
     <div className="space-y-6">
@@ -356,12 +359,12 @@ export default function Scheduling() {
       <div className="flex flex-col lg:flex-row gap-6">
         {/* Main content */}
         <div className="flex-1 min-w-0">
-          {view === 'calendar' ? <CalendarView /> : <GanttView />}
+          {view === 'calendar' ? <CalendarView scheduleEvents={scheduleEvents} /> : <GanttView scheduleEvents={scheduleEvents} />}
         </div>
 
         {/* Right sidebar */}
         <div className="w-full lg:w-72 flex-shrink-0">
-          <TodaySidebar />
+          <TodaySidebar scheduleEvents={scheduleEvents} />
         </div>
       </div>
     </div>

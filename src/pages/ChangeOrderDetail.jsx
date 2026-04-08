@@ -1,9 +1,8 @@
 import { useState } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { ArrowLeft, CheckCircle, XCircle, Clock, DollarSign, FolderKanban, GitBranch, Loader2 } from 'lucide-react';
-import { changeOrders as mockChangeOrders, projects as mockProjects } from '../data/mockData';
-import { changeOrderService } from '../services/supabaseService';
-import { useSupabaseById } from '../hooks/useSupabase';
+import { changeOrderService, projectService } from '../services/supabaseService';
+import { useSupabase, useSupabaseById } from '../hooks/useSupabase';
 
 const fmt = (v) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(v || 0);
 
@@ -19,12 +18,8 @@ export default function ChangeOrderDetail() {
   const navigate = useNavigate();
   const [saving, setSaving] = useState(false);
 
-  const mockFinder = (searchId) =>
-    mockChangeOrders.find((co) => co.id === searchId) ||
-    mockChangeOrders.find((co) => co.co_number === searchId) ||
-    null;
-
-  const { data: co, loading, setData } = useSupabaseById(changeOrderService.getById, id, mockFinder);
+  const { data: co, loading, setData } = useSupabaseById(changeOrderService.getById, id);
+  const { data: projectsList } = useSupabase(projectService.list);
 
   if (loading) return (
     <div style={{ padding: '2rem', display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#94a3b8' }}>
@@ -46,7 +41,7 @@ export default function ChangeOrderDetail() {
   const coId = co.id || co.co_number;
   const coStatus = co.status || 'Pending';
   const st = STATUS_STYLE[coStatus] || STATUS_STYLE.Pending;
-  const project = mockProjects.find((p) => p.id === (co.projectId || co.project_id));
+  const project = projectsList.find((p) => p.id === (co.projectId || co.project_id));
   const versions = co.versions || co.change_order_versions || [];
   const description = co.description;
   const amount = parseFloat(co.amount || 0);

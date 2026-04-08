@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Plus, Search, Star, HardHat } from 'lucide-react';
-import { subcontractors } from '../data/mockData';
+import { subcontractorService } from '../services/supabaseService';
+import { useSupabase } from '../hooks/useSupabase';
 
 const statusBadge = {
   Active: 'badge-green',
@@ -37,6 +38,7 @@ function StarRating({ rating }) {
 
 function Subcontractors() {
   const [search, setSearch] = useState('');
+  const { data: subcontractors } = useSupabase(subcontractorService.list);
 
   const filtered = subcontractors.filter((s) => {
     const q = search.toLowerCase();

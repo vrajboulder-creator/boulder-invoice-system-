@@ -16,14 +16,15 @@ import {
   Legend,
 } from 'recharts';
 import {
-  revenueData,
-  projects,
-  invoices,
-  timesheetEntries,
-  employees,
-  clients,
-  jobCostData,
-} from '../data/mockData';
+  revenueService,
+  projectService,
+  invoiceService,
+  timesheetService,
+  employeeService,
+  clientService,
+  jobCostService,
+} from '../services/supabaseService';
+import { useSupabase } from '../hooks/useSupabase';
 
 const formatCurrency = (value) =>
   new Intl.NumberFormat('en-US', {
@@ -33,63 +34,60 @@ const formatCurrency = (value) =>
     maximumFractionDigits: 0,
   }).format(value);
 
-// ── Computed Data ──────────────────────────────────────────
+// ── Computed Data functions ──────────────────────────────────────────
+function computeProfitabilityData(jobCostData) {
+  return jobCostData
+    .map((p) => {
+      const totalBudget = (p.categories || []).reduce((s, c) => s + c.budgeted, 0);
+      const totalSpent = (p.categories || []).reduce((s, c) => s + c.actual, 0);
+      const profitLoss = totalBudget - totalSpent;
+      const margin = totalBudget > 0 ? (profitLoss / totalBudget) * 100 : 0;
+      return {
+        projectId: p.projectId,
+        projectName: p.projectName,
+        totalBudget,
+        totalSpent,
+        profitLoss,
+        margin,
+      };
+    })
+    .sort((a, b) => b.margin - a.margin);
+}
 
-// Project profitability from jobCostData
-const profitabilityData = jobCostData
-  .map((p) => {
-    const totalBudget = p.categories.reduce((s, c) => s + c.budgeted, 0);
-    const totalSpent = p.categories.reduce((s, c) => s + c.actual, 0);
-    const profitLoss = totalBudget - totalSpent;
-    const margin = totalBudget > 0 ? (profitLoss / totalBudget) * 100 : 0;
-    return {
-      projectId: p.projectId,
-      projectName: p.projectName,
-      totalBudget,
-      totalSpent,
-      profitLoss,
-      margin,
-    };
-  })
-  .sort((a, b) => b.margin - a.margin);
+function computeEmployeeHoursData(timesheetEntries) {
+  const employeeHoursMap = {};
+  timesheetEntries.forEach((ts) => {
+    if (!employeeHoursMap[ts.employeeId]) {
+      employeeHoursMap[ts.employeeId] = {
+        name: ts.employee,
+        totalHours: 0,
+        projects: new Set(),
+        days: new Set(),
+      };
+    }
+    employeeHoursMap[ts.employeeId].totalHours += ts.hours;
+    if (ts.projectId) employeeHoursMap[ts.employeeId].projects.add(ts.projectId);
+    employeeHoursMap[ts.employeeId].days.add(ts.date);
+  });
+  return Object.entries(employeeHoursMap).map(([id, data]) => ({
+    id,
+    name: data.name,
+    totalHours: data.totalHours,
+    projectCount: data.projects.size,
+    avgHoursPerDay: data.days.size > 0 ? (data.totalHours / data.days.size).toFixed(1) : '0.0',
+  }));
+}
 
-// Employee hours report
-const employeeHoursMap = {};
-timesheetEntries.forEach((ts) => {
-  if (!employeeHoursMap[ts.employeeId]) {
-    employeeHoursMap[ts.employeeId] = {
-      name: ts.employee,
-      totalHours: 0,
-      projects: new Set(),
-      days: new Set(),
-    };
-  }
-  employeeHoursMap[ts.employeeId].totalHours += ts.hours;
-  if (ts.projectId) employeeHoursMap[ts.employeeId].projects.add(ts.projectId);
-  employeeHoursMap[ts.employeeId].days.add(ts.date);
-});
-
-const employeeHoursData = Object.entries(employeeHoursMap).map(([id, data]) => ({
-  id,
-  name: data.name,
-  totalHours: data.totalHours,
-  projectCount: data.projects.size,
-  avgHoursPerDay: data.days.size > 0 ? (data.totalHours / data.days.size).toFixed(1) : '0.0',
-}));
-
-const employeeChartData = employeeHoursData
-  .map((e) => ({ name: e.name.split(' ')[0], hours: e.totalHours }))
-  .sort((a, b) => b.hours - a.hours);
-
-// Invoice aging
-const paidCount = invoices.filter((i) => i.status === 'Paid').length;
-const pendingCount = invoices.filter((i) => i.status === 'Pending').length;
-const overdueCount = invoices.filter((i) => i.status === 'Overdue').length;
-const invoiceAgingData = [
-  { name: 'Paid', value: paidCount, color: '#10b981' },
-  { name: 'Pending', value: pendingCount, color: '#f59e0b' },
-  { name: 'Overdue', value: overdueCount, color: '#ef4444' },
-];
+function computeInvoiceAgingData(invoices) {
+  const paidCount = invoices.filter((i) => i.status === 'Paid').length;
+  const pendingCount = invoices.filter((i) => i.status === 'Pending').length;
+  const overdueCount = invoices.filter((i) => i.status === 'Overdue').length;
+  return [
+    { name: 'Paid', value: paidCount, color: '#10b981' },
+    { name: 'Pending', value: pendingCount, color: '#f59e0b' },
+    { name: 'Overdue', value: overdueCount, color: '#ef4444' },
+  ];
+}
 
 // ── Tooltip Components ─────────────────────────────────────
 
@@ -189,6 +187,21 @@ const tdStyle = {
 // ── Component ──────────────────────────────────────────────
 
 export default function Reports() {
+  const { data: revenueData } = useSupabase(revenueService.list);
+  const { data: projects } = useSupabase(projectService.list);
+  const { data: invoices } = useSupabase(invoiceService.list);
+  const { data: timesheetEntries } = useSupabase(timesheetService.list);
+  const { data: employees } = useSupabase(employeeService.list);
+  const { data: clients } = useSupabase(clientService.list);
+  const { data: jobCostData } = useSupabase(jobCostService.list);
+
+  const profitabilityData = computeProfitabilityData(jobCostData);
+  const employeeHoursData = computeEmployeeHoursData(timesheetEntries);
+  const employeeChartData = employeeHoursData
+    .map((e) => ({ name: e.name.split(' ')[0], hours: e.totalHours }))
+    .sort((a, b) => b.hours - a.hours);
+  const invoiceAgingData = computeInvoiceAgingData(invoices);
+
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   const [selectedProject, setSelectedProject] = useState('');

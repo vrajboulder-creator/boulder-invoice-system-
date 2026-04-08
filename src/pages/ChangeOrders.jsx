@@ -12,10 +12,8 @@ import {
   XCircle,
   Loader2,
   Wifi,
-  WifiOff,
 } from 'lucide-react';
 import { downloadPdf } from '../utils/downloadPdf';
-import { changeOrders as mockChangeOrders, rfis as mockRfis, projects as mockProjects } from '../data/mockData';
 import { changeOrderService, rfiService, projectService } from '../services/supabaseService';
 import { useSupabase } from '../hooks/useSupabase';
 
@@ -104,17 +102,16 @@ export default function ChangeOrders() {
   const [printCO, setPrintCO] = useState(null);
   const [actionLoading, setActionLoading] = useState(null); // id of CO being acted on
 
-  // Supabase data with mock fallback
-  const { data: rawCOs, loading: cosLoading, usingMock: cosMock, refetch: refetchCOs } = useSupabase(changeOrderService.list, mockChangeOrders);
-  const { data: rawRFIs, loading: rfisLoading, usingMock: rfisMock } = useSupabase(rfiService.list, mockRfis);
-  const { data: rawProjects } = useSupabase(projectService.list, mockProjects);
+  // Supabase data
+  const { data: rawCOs, loading: cosLoading, refetch: refetchCOs } = useSupabase(changeOrderService.list);
+  const { data: rawRFIs, loading: rfisLoading } = useSupabase(rfiService.list);
+  const { data: rawProjects } = useSupabase(projectService.list);
 
   // Normalise data to a consistent shape
   const changeOrders = rawCOs.map(normaliseCO);
   const rfisData = rawRFIs.map(normaliseRFI);
   const projectsList = rawProjects;
 
-  const usingMock = cosMock || rfisMock;
   const loading = cosLoading || rfisLoading;
 
   const toggleRow = (id) => setExpandedRow(expandedRow === id ? null : id);
@@ -334,16 +331,16 @@ export default function ChangeOrders() {
           <h1 className="page-title">Change Orders & RFIs</h1>
           <p style={{ color: '#64748b', fontSize: '0.875rem', marginTop: 4 }}>Manage change orders, revisions, and RFIs across all projects</p>
         </div>
-        {/* Live / Mock indicator */}
+        {/* Live indicator */}
         <div style={{
           display: 'flex', alignItems: 'center', gap: 6,
           padding: '4px 12px', borderRadius: 20,
-          background: usingMock ? '#fef3c7' : '#ecfdf5',
-          color: usingMock ? '#92400e' : '#047857',
+          background: '#ecfdf5',
+          color: '#047857',
           fontSize: '0.7rem', fontWeight: 600,
         }}>
-          {usingMock ? <WifiOff size={13} /> : <Wifi size={13} />}
-          {usingMock ? 'Mock Data' : 'Live'}
+          <Wifi size={13} />
+          Live
         </div>
       </div>
 

@@ -1,8 +1,7 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Plus, DollarSign, TrendingUp, AlertCircle, FileText, CheckCircle, Clock, Loader2, Database, HardDrive, Search, Lock } from 'lucide-react';
-import { invoices as mockInvoiceData, clients as mockClients, projects as mockProjects, contracts as mockContracts } from '../data/mockData';
-import { invoiceService } from '../services/supabaseService';
+import { Plus, DollarSign, TrendingUp, AlertCircle, FileText, CheckCircle, Clock, Loader2, Search, Lock } from 'lucide-react';
+import { invoiceService, contractService, clientService, projectService } from '../services/supabaseService';
 import { useSupabase } from '../hooks/useSupabase';
 
 const formatCurrency = (amount) =>
@@ -29,8 +28,11 @@ export default function Invoices() {
   const [projectFilter, setProjectFilter] = useState('');
   const [contractFilter, setContractFilter] = useState('');
 
-  // Fetch invoices from Supabase with mock fallback
-  const { data: invoices, loading, usingMock, refetch } = useSupabase(invoiceService.list, mockInvoiceData);
+  // Fetch invoices, contracts, clients, and projects from Supabase
+  const { data: invoices, loading, refetch } = useSupabase(invoiceService.list);
+  const { data: contracts } = useSupabase(contractService.list);
+  const { data: clients } = useSupabase(clientService.list);
+  const { data: projects } = useSupabase(projectService.list);
 
   // Normalize fields — works for Supabase, mock invoices, and mock payApplications
   const getClientName = (inv) => {
@@ -38,7 +40,7 @@ export default function Invoices() {
     if (inv.owner) return inv.owner; // mock payApplications
     if (inv.client) return inv.client; // mock invoices (company string)
     const cId = inv.client_id || inv.clientId;
-    const found = mockClients.find((c) => c.id === cId);
+    const found = clients.find((c) => c.id === cId);
     return found ? found.company : cId || '—';
   };
 
@@ -47,7 +49,7 @@ export default function Invoices() {
     if (inv.projectName) return inv.projectName; // mock payApplications
     if (inv.project) return inv.project; // mock invoices
     const pId = inv.project_id || inv.projectId;
-    const found = mockProjects.find((p) => p.id === pId);
+    const found = projects.find((p) => p.id === pId);
     return found ? found.name : pId || '—';
   };
 
@@ -55,8 +57,8 @@ export default function Invoices() {
   const getContractLabel = (inv) => {
     const cid = getContractId(inv);
     if (!cid) return null;
-    const con = mockContracts.find((c) => c.id === cid);
-    return con ? `${cid}` : cid;
+    const con = contracts.find((c) => c.id === cid);
+    return con ? (con.title || cid) : cid;
   };
 
   const getAmount = (inv) => inv.current_payment_due || inv.currentPaymentDue || inv.amount || 0;
@@ -91,8 +93,20 @@ export default function Invoices() {
   });
   const agingTotal = aging['0-30'] + aging['31-60'] + aging['61-90'];
 
-  // Project-level outstanding balance: total invoiced for that projectId minus total paid
+  // Project-level outstanding: contract_value minus total billed across all invoices on that contract
   const getProjectOutstanding = (inv) => {
+    const contractId = inv.contract_id || inv.contractId;
+    if (contractId) {
+      const contract = contracts.find((c) => c.id === contractId);
+      if (contract) {
+        const contractValue = parseFloat(contract.contract_value ?? contract.contractValue ?? 0);
+        const totalBilled = invoices
+          .filter((i) => (i.contract_id || i.contractId) === contractId)
+          .reduce((s, i) => s + getAmount(i), 0);
+        return contractValue - totalBilled;
+      }
+    }
+    // Fallback: project-level total invoiced minus paid
     const pId = inv.project_id || inv.projectId;
     if (!pId) return null;
     const projectInvoices = invoices.filter((i) => (i.project_id || i.projectId) === pId);
@@ -140,9 +154,9 @@ export default function Invoices() {
   const invoiceClientIds = [...new Set(invoices.map((i) => i.client_id || i.clientId).filter(Boolean))];
   const invoiceProjectIds = [...new Set(invoices.map((i) => i.project_id || i.projectId).filter(Boolean))];
   const invoiceContractIds = [...new Set(invoices.map((i) => i.contract_id || i.contractId).filter(Boolean))];
-  const filterClients = mockClients.filter((c) => invoiceClientIds.includes(c.id));
-  const filterProjects = mockProjects.filter((p) => invoiceProjectIds.includes(p.id));
-  const filterContracts = mockContracts.filter((c) => invoiceContractIds.includes(c.id));
+  const filterClients = clients.filter((c) => invoiceClientIds.includes(c.id));
+  const filterProjects = projects.filter((p) => invoiceProjectIds.includes(p.id));
+  const filterContracts = contracts.filter((c) => invoiceContractIds.includes(c.id));
 
   // ── Actions ──
   const handleMarkPaid = async (id) => {
@@ -189,17 +203,6 @@ export default function Invoices() {
           </p>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-          {/* Mock / Live indicator */}
-          <span style={{
-            display: 'inline-flex', alignItems: 'center', gap: '6px',
-            padding: '4px 12px', borderRadius: '999px', fontSize: '0.75rem', fontWeight: 600,
-            background: usingMock ? '#fef3c7' : '#dcfce7',
-            color: usingMock ? '#92400e' : '#166534',
-            border: `1px solid ${usingMock ? '#fbbf24' : '#22c55e'}`,
-          }}>
-            {usingMock ? <HardDrive size={12} /> : <Database size={12} />}
-            {usingMock ? 'Mock Data' : 'Live'}
-          </span>
           <Link to="/invoices/create" className="btn-primary" style={{ textDecoration: 'none' }}>
             <Plus size={16} />
             Create Invoice

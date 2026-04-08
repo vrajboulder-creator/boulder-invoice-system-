@@ -8,8 +8,10 @@ import {
   Calendar,
   DollarSign,
   Users,
+  Loader2,
 } from 'lucide-react';
-import { projects, employees } from '../data/mockData';
+import { projectService, employeeService } from '../services/supabaseService';
+import { useSupabase } from '../hooks/useSupabase';
 
 const statusBadge = {
   'In Progress': 'badge-blue',
@@ -59,6 +61,18 @@ function formatBudget(amount) {
 export default function Projects() {
   const [view, setView] = useState('card');
   const [search, setSearch] = useState('');
+
+  const { data: projects, loading } = useSupabase(projectService.list);
+
+  if (loading) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: 300, gap: 12 }}>
+        <Loader2 size={36} style={{ color: '#2563eb', animation: 'spin 1s linear infinite' }} />
+        <span style={{ color: '#64748b', fontSize: '0.875rem' }}>Loading projects...</span>
+        <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+      </div>
+    );
+  }
 
   const filtered = projects.filter((p) => {
     const q = search.toLowerCase();

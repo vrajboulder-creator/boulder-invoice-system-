@@ -1,8 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ArrowLeft, Plus, X, Save, Send, FileText, Calculator, Loader2, FileCheck } from 'lucide-react';
-import { projects as mockProjects, clients as mockClients, estimates as mockEstimates } from '../data/mockData';
-import { payAppService, projectService, lienWaiverService } from '../services/supabaseService';
+import { payAppService, projectService, clientService, estimateService, lienWaiverService } from '../services/supabaseService';
 import { useSupabase } from '../hooks/useSupabase';
 
 const formatCurrency = (amount) =>
@@ -25,8 +24,9 @@ const emptyLineItem = (itemNum = 1) => ({
 export default function PayApplicationCreate() {
   const navigate = useNavigate();
 
-  // Fetch projects from Supabase with mock fallback
-  const { data: projectsList, usingMock: usingMockProjects } = useSupabase(projectService.list, mockProjects);
+  const { data: projectsList } = useSupabase(projectService.list);
+  const { data: clientsList } = useSupabase(clientService.list);
+  const { data: estimatesList } = useSupabase(estimateService.list);
 
   // Project information
   const [projectId, setProjectId] = useState('');
@@ -70,18 +70,18 @@ export default function PayApplicationCreate() {
       return;
     }
 
-    // Try Supabase project first (snake_case), then mock (camelCase)
+    // Support both snake_case (Supabase) and camelCase field names
     const project = projectsList.find((p) => p.id === projectId);
     if (!project) return;
 
-    // Support both Supabase snake_case and mock camelCase
+    // Support both Supabase snake_case and camelCase
     const clientId = project.client_id ?? project.clientId;
     const projectName = project.name ?? project.project_name ?? '';
 
-    // Fill owner — try to find client from mock data (since clients may not be in Supabase yet)
-    if (usingMockProjects) {
-      const client = mockClients.find((c) => c.id === clientId);
-      setOwnerName(client ? `${client.name} — ${client.company}` : project.client || '');
+    // Fill owner from clients list
+    const client = clientsList.find((c) => c.id === clientId);
+    if (client) {
+      setOwnerName(`${client.name} — ${client.company || ''}`);
     } else {
       setOwnerName(project.owner_name ?? project.client ?? '');
     }
@@ -90,29 +90,26 @@ export default function PayApplicationCreate() {
     setContractFor(project.description ?? projectName);
     setOriginalContractSum(project.budget ?? 0);
 
-    // Try to find matching estimate and pre-populate line items (mock only)
-    if (usingMockProjects) {
-      const matchingEstimate = mockEstimates.find(
-        (e) => e.clientId === clientId && e.projectName === projectName
+    // Try to find matching estimate and pre-populate line items
+    const matchingEstimate = estimatesList.find(
+      (e) => (e.clientId === clientId || e.client_id === clientId) && (e.projectName === projectName || e.project_name === projectName)
+    );
+    if (matchingEstimate && (matchingEstimate.lineItems || matchingEstimate.line_items) && (matchingEstimate.lineItems || matchingEstimate.line_items).length > 0) {
+      const items = matchingEstimate.lineItems || matchingEstimate.line_items;
+      setLineItems(
+        items.map((item, idx) => ({
+          itemNumber: idx + 1,
+          description: item.description,
+          scheduledValue: item.total || 0,
+          previousApplication: 0,
+          thisPeriod: 0,
+          materialsStored: 0,
+        }))
       );
-      if (matchingEstimate && matchingEstimate.lineItems && matchingEstimate.lineItems.length > 0) {
-        setLineItems(
-          matchingEstimate.lineItems.map((item, idx) => ({
-            itemNumber: idx + 1,
-            description: item.description,
-            scheduledValue: item.total || 0,
-            previousApplication: 0,
-            thisPeriod: 0,
-            materialsStored: 0,
-          }))
-        );
-      } else {
-        setLineItems([emptyLineItem(1)]);
-      }
     } else {
       setLineItems([emptyLineItem(1)]);
     }
-  }, [projectId, projectsList, usingMockProjects]);
+  }, [projectId, projectsList, clientsList, estimatesList]);
 
   // Line item helpers
   const updateLineItem = (index, field, value) => {
@@ -231,7 +228,7 @@ export default function PayApplicationCreate() {
     } catch (err) {
       console.warn('Supabase save failed:', err.message);
       // Fallback: just show alert and navigate anyway
-      alert(`Pay Application saved as "${status}" (mock mode). Current Payment Due: ${formatCurrency(currentPaymentDue)}`);
+      alert(`Pay Application saved as "${status}" (offline). Current Payment Due: ${formatCurrency(currentPaymentDue)}`);
       navigate('/pay-applications');
     } finally {
       setSaving(false);

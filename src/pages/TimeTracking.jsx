@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   Clock,
   AlertCircle,
@@ -6,7 +6,8 @@ import {
   CheckCircle,
   XCircle,
 } from 'lucide-react';
-import { timesheetEntries, employees, projects } from '../data/mockData';
+import { timesheetService, employeeService, projectService } from '../services/supabaseService';
+import { useSupabase } from '../hooks/useSupabase';
 
 // Reference week: March 28–31, 2026 (Sat–Tue)
 const WEEK_START = '2026-03-28';
@@ -15,11 +16,20 @@ const WEEK_END = '2026-03-31';
 const isInCurrentWeek = (dateStr) => dateStr >= WEEK_START && dateStr <= WEEK_END;
 
 export default function TimeTracking() {
+  const { data: timesheetEntries } = useSupabase(timesheetService.list);
+  const { data: employees } = useSupabase(employeeService.list);
+  const { data: projects } = useSupabase(projectService.list);
+
   const [employeeFilter, setEmployeeFilter] = useState('All');
   const [projectFilter, setProjectFilter] = useState('All');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
-  const [entries, setEntries] = useState(timesheetEntries);
+  const [entries, setEntries] = useState([]);
+
+  // Sync entries when timesheetEntries loads from Supabase
+  useEffect(() => {
+    if (timesheetEntries.length > 0) setEntries(timesheetEntries);
+  }, [timesheetEntries]);
 
   // --- Summary calculations ---
   const weekEntries = entries.filter((e) => isInCurrentWeek(e.date));

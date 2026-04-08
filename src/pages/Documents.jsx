@@ -15,7 +15,8 @@ import {
   ChevronDown,
   ChevronRight,
 } from 'lucide-react';
-import { documents, projects } from '../data/mockData';
+import { documentService, projectService } from '../services/supabaseService';
+import { useSupabase } from '../hooks/useSupabase';
 
 const CATEGORIES = [
   'Plans',
@@ -50,6 +51,9 @@ function Documents() {
   const [projectFilter, setProjectFilter] = useState('All');
   const [viewMode, setViewMode] = useState('grid');
   const [collapsedFolders, setCollapsedFolders] = useState({});
+
+  const { data: documents } = useSupabase(documentService.list);
+  const { data: projects } = useSupabase(projectService.list);
 
   const toggleFolder = (category) => {
     setCollapsedFolders((prev) => ({ ...prev, [category]: !prev[category] }));

@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Plus, Search, FileSignature, DollarSign, Calendar, Building2 } from 'lucide-react';
-import { contracts as mockContracts } from '../data/mockData';
 import { contractService } from '../services/supabaseService';
 import { useSupabase } from '../hooks/useSupabase';
 
@@ -25,7 +24,7 @@ const TYPE_STYLE = {
 export default function Contracts() {
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('All');
-  const { data: contracts } = useSupabase(contractService.list, mockContracts);
+  const { data: contracts } = useSupabase(contractService.list);
 
   const statuses = ['All', 'Draft', 'Sent', 'Signed', 'Void'];
 

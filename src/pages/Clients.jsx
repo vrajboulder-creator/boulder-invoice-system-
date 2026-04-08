@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Plus, Search } from 'lucide-react';
-import { clients } from '../data/mockData';
+import { clientService } from '../services/supabaseService';
+import { useSupabase } from '../hooks/useSupabase';
 
 const statusBadge = {
   Active: 'badge-green',
@@ -10,17 +11,22 @@ const statusBadge = {
 };
 
 function Clients() {
+  const { data: clients, loading } = useSupabase(clientService.list);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('All');
 
-  const filtered = clients.filter((c) => {
+  const filtered = (clients || []).filter((c) => {
     const matchesSearch =
-      c.name.toLowerCase().includes(search.toLowerCase()) ||
-      c.company.toLowerCase().includes(search.toLowerCase()) ||
-      c.email.toLowerCase().includes(search.toLowerCase());
+      (c.name || '').toLowerCase().includes(search.toLowerCase()) ||
+      (c.company || '').toLowerCase().includes(search.toLowerCase()) ||
+      (c.email || '').toLowerCase().includes(search.toLowerCase());
     const matchesStatus = statusFilter === 'All' || c.status === statusFilter;
     return matchesSearch && matchesStatus;
   });
+
+  if (loading) {
+    return <div style={{ padding: '2rem', textAlign: 'center', color: '#9ca3af' }}>Loading clients...</div>;
+  }
 
   return (
     <div>
